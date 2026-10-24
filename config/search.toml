@@ -1,0 +1,10 @@
+# BM25 关键词检索参数。
+
+[index]
+chunks_file = "data/chunks.jsonl"   # 由 chunk_docs 产出的 chunk 语料
+index_dir = "data/bm25-index"       # 索引与 corpus 落盘目录
+stopwords = "english"               # bm25s 内置停用词（"english"/"en" 或自定义列表）
+method = "lucene"                   # 打分方法：lucene / robertson / atire / bm25l / bm25+
+
+[search]
+k = 5                               # 默认返回条数
