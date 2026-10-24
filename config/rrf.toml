@@ -1,0 +1,7 @@
+# Reciprocal Rank Fusion（RRF）融合参数：合并 BM25 与向量检索的排名。
+
+[fusion]
+k = 60                # 平滑常数，常用 60：score = Σ w / (k + rank)
+weights = [1.0, 1.0]  # 两路权重，依次对应 BM25、向量
+candidates = 20       # 每路参与融合的候选条数
+top_n = 5             # 输出条数
