@@ -1,4 +1,4 @@
-"""为切块后的 chunk 生成向量，并做向量检索。
+"""为切块后的 chunk 生成向量，并用固定问题演示一次向量检索。
 
 模型与接口由 config/embedding.toml 指定，代码与具体模型无关。
 
@@ -6,24 +6,23 @@
 - 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口）
 - 输入是 chunk_docs 产出的 data/chunks.jsonl，输出 data/embeddings/ 下的
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
-- search 子命令：嵌入查询文本，与已落盘向量做余弦相似度，返回 top-k
+- 已嵌入且模型/语料未变时直接复用 vectors.npy，不重复请求接口
+- 运行结束用固定问题检索一次（余弦相似度，top-k 由配置决定），无需交互
 
 用法:
-    uv run python -m fastrag.embed_chunks                     # 全量嵌入
-    uv run python -m fastrag.embed_chunks embed --limit 8     # 冒烟测试
-    uv run python -m fastrag.embed_chunks search "human in the loop" -k 3
-    uv run python -m fastrag.embed_chunks demo                # 检索演示
+    uv run python -m fastrag.embed_chunks
 
-检索示例:
-    $ uv run python -m fastrag.embed_chunks demo
+输出示例:
+    $ uv run python -m fastrag.embed_chunks
+    复用已嵌入向量：2625 条 -> .../data/embeddings/vectors.npy
     查询: human in the loop approval
-    1. 0.685  data/langchain-docs/oss/python/deepagents/human-in-the-loop.md#0-2111
+    1. 0.684  data/langchain-docs/oss/python/deepagents/human-in-the-loop.md#0-2111
        > ## Documentation Index > Fetch the complete documentation index at: https://docs...
-    2. 0.679  data/langchain-docs/oss/python/concepts/human-in-the-loop.md#0-2152
+    2. 0.678  data/langchain-docs/oss/python/concepts/human-in-the-loop.md#0-2152
        > ## Documentation Index > Fetch the complete documentation index at: https://docs...
+    ...
 """
 
-import argparse
 import datetime
 import json
 import os
@@ -98,9 +97,7 @@ def build_embeddings(config: EmbeddingConfig) -> OpenAIEmbeddings:
     """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。"""
     api_key = os.environ.get(config.api_key_env)
     if not api_key:
-        raise SystemExit(
-            f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写"
-        )
+        raise SystemExit(f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写")
     return OpenAIEmbeddings(
         model=config.model,
         base_url=config.base_url,
@@ -154,31 +151,45 @@ def save_vectors(config: EmbeddingConfig, vectors: np.ndarray) -> None:
     )
 
 
-def load_vectors(config: EmbeddingConfig) -> tuple[np.ndarray, dict]:
-    """读取已落盘的向量与元信息。"""
+def ensure_vectors(config: EmbeddingConfig, chunks: list[dict]) -> np.ndarray:
+    """已有可用向量则直接加载，否则嵌入并落盘。"""
     vectors_path = config.out_dir / "vectors.npy"
     manifest_path = config.out_dir / "manifest.json"
-    if not vectors_path.exists() or not manifest_path.exists():
-        raise SystemExit(
-            "向量不存在，请先运行: uv run python -m fastrag.embed_chunks embed"
-        )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return np.load(vectors_path), manifest
+    if vectors_path.exists() and manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            manifest["model"] == config.model
+            and manifest["dimensions"] == config.dimensions
+            and manifest["count"] == len(chunks)
+        ):
+            print(f"复用已嵌入向量：{manifest['count']} 条 -> {vectors_path}")
+            return np.load(vectors_path)
+        print("已有向量与当前模型/语料不一致，重新嵌入 ...")
+    else:
+        print("未找到已嵌入向量，开始嵌入 ...")
+
+    started = time.perf_counter()
+    vectors = embed_chunks(build_embeddings(config), config, chunks, config.batch_size)
+    save_vectors(config, vectors)
+    print(
+        f"{len(chunks)} 个 chunk -> {vectors.shape} float32，"
+        f"耗时 {time.perf_counter() - started:.1f}s -> {config.out_dir}"
+    )
+    return vectors
 
 
 def search(
-    config: EmbeddingConfig, text: str, k: int
+    config: EmbeddingConfig,
+    vectors: np.ndarray,
+    chunks: list[dict],
+    text: str,
+    k: int,
 ) -> list[tuple[float, dict]]:
     """返回 top-k 命中 chunk 及其余弦相似度（降序）。
 
     度量：余弦相似度 —— 查询与语料向量都先做 L2 归一化，再取内积，
     取值 [-1, 1]，越大越相近；归一化可消除向量长度对打分的影响。
     """
-    chunks = load_chunks(config)
-    vectors, manifest = load_vectors(config)
-    if manifest["model"] != config.model or manifest["count"] != len(chunks):
-        raise SystemExit("向量与当前模型/语料不一致，请重新运行 embed")
-
     query = np.asarray(build_embeddings(config).embed_query(text), dtype=np.float32)
     # 余弦相似度 = 归一化后的内积
     query /= np.linalg.norm(query)
@@ -202,43 +213,13 @@ def print_hits(hits: list[tuple[float, dict]]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="chunk 向量化与检索")
-    sub = parser.add_subparsers(dest="command")
-    embed = sub.add_parser("embed", help="嵌入全部 chunk（默认）")
-    embed.add_argument("--limit", type=int, default=None, help="只嵌入前 N 条")
-    embed.add_argument("--batch-size", type=int, default=None, help="覆盖 batch_size")
-    query = sub.add_parser("search", help="向量检索")
-    query.add_argument("text", help="查询语句")
-    query.add_argument("-k", type=int, default=None, help="返回条数，默认取配置值")
-    demo = sub.add_parser("demo", help="检索演示（内置示例查询）")
-    demo.add_argument("-k", type=int, default=None, help="返回条数，默认取配置值")
-    args = parser.parse_args()
-
     load_env()
     config = load_config()
-
-    if args.command in {"search", "demo"}:
-        text = DEMO_QUERY if args.command == "demo" else args.text
-        if args.command == "demo":
-            print(f"查询: {text}")
-        print_hits(search(config, text, args.k or config.k))
-        return
-
     chunks = load_chunks(config)
-    if getattr(args, "limit", None):
-        chunks = chunks[: args.limit]
-    started = time.perf_counter()
-    vectors = embed_chunks(
-        build_embeddings(config),
-        config,
-        chunks,
-        getattr(args, "batch_size", None) or config.batch_size,
-    )
-    save_vectors(config, vectors)
-    print(
-        f"{len(chunks)} 个 chunk -> {vectors.shape} float32，"
-        f"耗时 {time.perf_counter() - started:.1f}s -> {config.out_dir}"
-    )
+    vectors = ensure_vectors(config, chunks)
+
+    print(f"查询: {DEMO_QUERY}")
+    print_hits(search(config, vectors, chunks, DEMO_QUERY, config.k))
 
 
 if __name__ == "__main__":
