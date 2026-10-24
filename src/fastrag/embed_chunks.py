@@ -1,14 +1,15 @@
-"""用 Qwen3-Embedding 为 chunk 生成向量。
+"""用 Qwen3-Embedding 为 chunk 生成向量，并做向量检索。
 
-- 参数来自 config/embedding.toml；api key 与 base_url 只从 .env / 环境变量读取
+- 参数来自 config/embedding.toml；API key 只从 .env / 环境变量读取
+- 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口，SiliconFlow）
 - 输入是 chunk_docs 产出的 data/chunks.jsonl，输出 data/embeddings/ 下的
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
-- 走 OpenAI 兼容接口（SiliconFlow），模型默认 Qwen/Qwen3-Embedding-4B
+- search 子命令：嵌入查询文本，与已落盘向量做余弦相似度，返回 top-k
 
 用法:
-    cp .env.example .env          # 填 SILICONFLOW_API_KEY
-    uv run python -m fastrag.embed_chunks            # 全量
-    uv run python -m fastrag.embed_chunks --limit 8  # 冒烟测试
+    uv run python -m fastrag.embed_chunks                     # 全量嵌入
+    uv run python -m fastrag.embed_chunks embed --limit 8     # 冒烟测试
+    uv run python -m fastrag.embed_chunks search "human in the loop" -k 3
 """
 
 import argparse
@@ -21,11 +22,12 @@ import tomllib
 from dataclasses import dataclass
 
 import numpy as np
-from openai import OpenAI
+from langchain_openai import OpenAIEmbeddings
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "embedding.toml"
 ENV_PATH = ROOT / ".env"
+SNIPPET_CHARS = 160
 
 
 @dataclass(frozen=True)
@@ -37,10 +39,11 @@ class EmbeddingConfig:
     dimensions: int
     chunks_file: pathlib.Path
     out_dir: pathlib.Path
+    base_url: str
     api_key_env: str
-    base_url_env: str
     timeout: float
     max_retries: int
+    k: int
 
 
 def load_env(path: pathlib.Path = ENV_PATH) -> None:
@@ -58,17 +61,18 @@ def load_env(path: pathlib.Path = ENV_PATH) -> None:
 def load_config(path: pathlib.Path = CONFIG_PATH) -> EmbeddingConfig:
     """读取 TOML 配置，并把相对路径解析到仓库根目录下。"""
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    model, paths, api = raw["model"], raw["paths"], raw["api"]
+    model, paths, api, search = raw["model"], raw["paths"], raw["api"], raw["search"]
     return EmbeddingConfig(
         model=model["name"],
         batch_size=model["batch_size"],
         dimensions=model["dimensions"],
         chunks_file=(ROOT / paths["chunks_file"]).resolve(),
         out_dir=(ROOT / paths["out_dir"]).resolve(),
+        base_url=api["base_url"],
         api_key_env=api["api_key_env"],
-        base_url_env=api["base_url_env"],
         timeout=api["timeout"],
         max_retries=api["max_retries"],
+        k=search["k"],
     )
 
 
@@ -78,50 +82,46 @@ def load_chunks(config: EmbeddingConfig) -> list[dict]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def build_client(config: EmbeddingConfig) -> OpenAI:
-    """按 .env 里的凭据建 OpenAI 兼容客户端，缺凭据时给出明确提示。"""
+def build_embeddings(config: EmbeddingConfig) -> OpenAIEmbeddings:
+    """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。"""
     api_key = os.environ.get(config.api_key_env)
-    base_url = os.environ.get(config.base_url_env)
-    if not api_key or not base_url:
+    if not api_key:
         raise SystemExit(
-            f"缺少 {config.api_key_env} / {config.base_url_env}，"
-            "请先 cp .env.example .env 并填写"
+            f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写"
         )
-    return OpenAI(api_key=api_key, base_url=base_url, timeout=config.timeout)
-
-
-def embed_batch(
-    client: OpenAI, config: EmbeddingConfig, texts: list[str]
-) -> list[list[float]]:
-    """嵌入一批文本，失败按指数退避重试。"""
-    last_error: Exception | None = None
-    for attempt in range(config.max_retries):
-        try:
-            response = client.embeddings.create(
-                model=config.model, input=texts, encoding_format="float"
-            )
-            ordered = sorted(response.data, key=lambda item: item.index)
-            return [item.embedding for item in ordered]
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            time.sleep(2**attempt)
-    raise RuntimeError(f"嵌入请求连续失败 {config.max_retries} 次: {last_error!r}")
+    return OpenAIEmbeddings(
+        model=config.model,
+        base_url=config.base_url,
+        api_key=api_key,
+        chunk_size=config.batch_size,
+        max_retries=config.max_retries,
+        request_timeout=config.timeout,
+        # 非 OpenAI 模型不做 tiktoken 预切分，交给服务端处理
+        check_embedding_ctx_length=False,
+    )
 
 
 def embed_chunks(
-    client: OpenAI, config: EmbeddingConfig, chunks: list[dict], batch_size: int
+    embeddings: OpenAIEmbeddings,
+    config: EmbeddingConfig,
+    chunks: list[dict],
+    batch_size: int,
 ) -> np.ndarray:
     """分批嵌入全部 chunk，返回 (N, dimensions) 的 float32 矩阵。"""
     vectors = np.zeros((len(chunks), config.dimensions), dtype=np.float32)
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start : start + batch_size]
-        embeddings = embed_batch(client, config, [chunk["text"] for chunk in batch])
-        if len(embeddings[0]) != config.dimensions:
+        batch_vectors = embeddings.embed_documents([chunk["text"] for chunk in batch])
+        if len(batch_vectors[0]) != config.dimensions:
             raise SystemExit(
-                f"返回维度 {len(embeddings[0])} 与配置 dimensions={config.dimensions} 不一致"
+                f"返回维度 {len(batch_vectors[0])} 与配置 dimensions={config.dimensions} 不一致"
             )
-        vectors[start : start + len(batch)] = embeddings
-        print(f"\r已嵌入 {min(start + batch_size, len(chunks))}/{len(chunks)}", end="", flush=True)
+        vectors[start : start + len(batch)] = batch_vectors
+        print(
+            f"\r已嵌入 {min(start + batch_size, len(chunks))}/{len(chunks)}",
+            end="",
+            flush=True,
+        )
     print()
     return vectors
 
@@ -142,21 +142,72 @@ def save_vectors(config: EmbeddingConfig, vectors: np.ndarray) -> None:
     )
 
 
+def load_vectors(config: EmbeddingConfig) -> tuple[np.ndarray, dict]:
+    """读取已落盘的向量与元信息。"""
+    vectors_path = config.out_dir / "vectors.npy"
+    manifest_path = config.out_dir / "manifest.json"
+    if not vectors_path.exists() or not manifest_path.exists():
+        raise SystemExit(
+            "向量不存在，请先运行: uv run python -m fastrag.embed_chunks embed"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return np.load(vectors_path), manifest
+
+
+def search(
+    config: EmbeddingConfig, text: str, k: int
+) -> list[tuple[float, dict]]:
+    """返回 top-k 命中 chunk 及其余弦相似度（降序）。"""
+    chunks = load_chunks(config)
+    vectors, manifest = load_vectors(config)
+    if manifest["model"] != config.model or manifest["count"] != len(chunks):
+        raise SystemExit("向量与当前模型/语料不一致，请重新运行 embed")
+
+    query = np.asarray(build_embeddings(config).embed_query(text), dtype=np.float32)
+    query /= np.linalg.norm(query)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    scores = (vectors / np.maximum(norms, 1e-12)) @ query
+    top = np.argsort(-scores)[: min(k, len(chunks))]
+    return [(float(scores[index]), chunks[index]) for index in top]
+
+
+def format_snippet(text: str) -> str:
+    """压平空白并截断，便于终端查看。"""
+    flat = " ".join(text.split())
+    return flat[:SNIPPET_CHARS] + ("..." if len(flat) > SNIPPET_CHARS else "")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="用 Qwen3-Embedding 为 chunk 生成向量")
-    parser.add_argument("--limit", type=int, default=None, help="只嵌入前 N 条（冒烟测试）")
-    parser.add_argument("--batch-size", type=int, default=None, help="覆盖配置里的 batch_size")
+    parser = argparse.ArgumentParser(description="Qwen3-Embedding 向量化与检索")
+    sub = parser.add_subparsers(dest="command")
+    embed = sub.add_parser("embed", help="嵌入全部 chunk（默认）")
+    embed.add_argument("--limit", type=int, default=None, help="只嵌入前 N 条")
+    embed.add_argument("--batch-size", type=int, default=None, help="覆盖 batch_size")
+    query = sub.add_parser("search", help="向量检索")
+    query.add_argument("text", help="查询语句")
+    query.add_argument("-k", type=int, default=None, help="返回条数，默认取配置值")
     args = parser.parse_args()
 
     load_env()
     config = load_config()
-    chunks = load_chunks(config)
-    if args.limit:
-        chunks = chunks[: args.limit]
 
+    if args.command == "search":
+        for rank, (score, chunk) in enumerate(
+            search(config, args.text, args.k or config.k), start=1
+        ):
+            print(f"{rank}. {score:.3f}  {chunk['source']}#{chunk['start']}-{chunk['end']}")
+            print(f"   {format_snippet(chunk['text'])}")
+        return
+
+    chunks = load_chunks(config)
+    if getattr(args, "limit", None):
+        chunks = chunks[: args.limit]
     started = time.perf_counter()
     vectors = embed_chunks(
-        build_client(config), config, chunks, args.batch_size or config.batch_size
+        build_embeddings(config),
+        config,
+        chunks,
+        getattr(args, "batch_size", None) or config.batch_size,
     )
     save_vectors(config, vectors)
     print(
