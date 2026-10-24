@@ -25,7 +25,18 @@ import tomllib
 from dataclasses import dataclass
 from typing import Sequence
 
-from . import embed_chunks, keyword_search
+from fastrag.embed_chunks import (
+    ensure_vectors,
+    load_chunks,
+    load_config as load_embedding_config,
+    load_env,
+    search as search_vectors,
+)
+from fastrag.keyword_search import (
+    format_snippet,
+    load_config as load_keyword_config,
+    search as search_keywords,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "rrf.toml"
@@ -86,15 +97,13 @@ def main() -> None:
 
     fusion = load_config()
 
-    bm25_hits = keyword_search.search(
-        keyword_search.load_config(), args.text, fusion.candidates
-    )
+    bm25_hits = search_keywords(load_keyword_config(), args.text, fusion.candidates)
 
-    embed_chunks.load_env()
-    embedding_config = embed_chunks.load_config()
-    chunks = embed_chunks.load_chunks(embedding_config)
-    vectors = embed_chunks.ensure_vectors(embedding_config, chunks)
-    vector_hits = embed_chunks.search(
+    load_env()
+    embedding_config = load_embedding_config()
+    chunks = load_chunks(embedding_config)
+    vectors = ensure_vectors(embedding_config, chunks)
+    vector_hits = search_vectors(
         embedding_config, vectors, chunks, args.text, fusion.candidates
     )
 
@@ -116,7 +125,7 @@ def main() -> None:
             f"{rank}. {score:.4f}  {chunk['source']}#{chunk['start']}-{chunk['end']}"
             f"  ({positions})"
         )
-        print(f"   {keyword_search.format_snippet(chunk['text'])}")
+        print(f"   {format_snippet(chunk['text'])}")
 
 
 if __name__ == "__main__":
