@@ -1,7 +1,9 @@
-"""用 Qwen3-Embedding 为 chunk 生成向量，并做向量检索。
+"""为切块后的 chunk 生成向量，并做向量检索。
+
+模型与接口由 config/embedding.toml 指定，代码与具体模型无关。
 
 - 参数来自 config/embedding.toml；API key 只从 .env / 环境变量读取
-- 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口，SiliconFlow）
+- 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口）
 - 输入是 chunk_docs 产出的 data/chunks.jsonl，输出 data/embeddings/ 下的
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
 - search 子命令：嵌入查询文本，与已落盘向量做余弦相似度，返回 top-k
@@ -10,6 +12,13 @@
     uv run python -m fastrag.embed_chunks                     # 全量嵌入
     uv run python -m fastrag.embed_chunks embed --limit 8     # 冒烟测试
     uv run python -m fastrag.embed_chunks search "human in the loop" -k 3
+
+检索示例:
+    $ uv run python -m fastrag.embed_chunks search "human in the loop approval" -k 2
+    1. 0.685  data/langchain-docs/oss/python/deepagents/human-in-the-loop.md#0-2111
+       > ## Documentation Index > Fetch the complete documentation index at: https://docs...
+    2. 0.679  data/langchain-docs/oss/python/concepts/human-in-the-loop.md#0-2152
+       > ## Documentation Index > Fetch the complete documentation index at: https://docs...
 """
 
 import argparse
@@ -157,13 +166,18 @@ def load_vectors(config: EmbeddingConfig) -> tuple[np.ndarray, dict]:
 def search(
     config: EmbeddingConfig, text: str, k: int
 ) -> list[tuple[float, dict]]:
-    """返回 top-k 命中 chunk 及其余弦相似度（降序）。"""
+    """返回 top-k 命中 chunk 及其余弦相似度（降序）。
+
+    度量：余弦相似度 —— 查询与语料向量都先做 L2 归一化，再取内积，
+    取值 [-1, 1]，越大越相近；归一化可消除向量长度对打分的影响。
+    """
     chunks = load_chunks(config)
     vectors, manifest = load_vectors(config)
     if manifest["model"] != config.model or manifest["count"] != len(chunks):
         raise SystemExit("向量与当前模型/语料不一致，请重新运行 embed")
 
     query = np.asarray(build_embeddings(config).embed_query(text), dtype=np.float32)
+    # 余弦相似度 = 归一化后的内积
     query /= np.linalg.norm(query)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     scores = (vectors / np.maximum(norms, 1e-12)) @ query
@@ -178,7 +192,7 @@ def format_snippet(text: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Qwen3-Embedding 向量化与检索")
+    parser = argparse.ArgumentParser(description="chunk 向量化与检索")
     sub = parser.add_subparsers(dest="command")
     embed = sub.add_parser("embed", help="嵌入全部 chunk（默认）")
     embed.add_argument("--limit", type=int, default=None, help="只嵌入前 N 条")
