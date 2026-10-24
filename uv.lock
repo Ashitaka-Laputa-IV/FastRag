@@ -224,6 +224,7 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "numpy" },
     { name = "tiktoken" },
 ]
 
@@ -234,6 +235,7 @@ requires-dist = [
     { name = "langchain", specifier = ">=1.4.7" },
     { name = "langchain-openai", specifier = ">=1.7.2" },
     { name = "langgraph", specifier = ">=1.2.17" },
+    { name = "numpy", specifier = ">=2.5.4" },
     { name = "tiktoken", specifier = ">=0.14.0" },
 ]
 
