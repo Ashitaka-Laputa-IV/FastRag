@@ -12,9 +12,11 @@
     uv run python -m fastrag.embed_chunks                     # 全量嵌入
     uv run python -m fastrag.embed_chunks embed --limit 8     # 冒烟测试
     uv run python -m fastrag.embed_chunks search "human in the loop" -k 3
+    uv run python -m fastrag.embed_chunks demo                # 检索演示
 
 检索示例:
-    $ uv run python -m fastrag.embed_chunks search "human in the loop approval" -k 2
+    $ uv run python -m fastrag.embed_chunks demo
+    查询: human in the loop approval
     1. 0.685  data/langchain-docs/oss/python/deepagents/human-in-the-loop.md#0-2111
        > ## Documentation Index > Fetch the complete documentation index at: https://docs...
     2. 0.679  data/langchain-docs/oss/python/concepts/human-in-the-loop.md#0-2152
@@ -37,6 +39,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "embedding.toml"
 ENV_PATH = ROOT / ".env"
 SNIPPET_CHARS = 160
+DEMO_QUERY = "human in the loop approval"
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,13 @@ def format_snippet(text: str) -> str:
     return flat[:SNIPPET_CHARS] + ("..." if len(flat) > SNIPPET_CHARS else "")
 
 
+def print_hits(hits: list[tuple[float, dict]]) -> None:
+    """按「排名 分数 来源#偏移」+ 文本片段的形式打印检索结果。"""
+    for rank, (score, chunk) in enumerate(hits, start=1):
+        print(f"{rank}. {score:.3f}  {chunk['source']}#{chunk['start']}-{chunk['end']}")
+        print(f"   {format_snippet(chunk['text'])}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="chunk 向量化与检索")
     sub = parser.add_subparsers(dest="command")
@@ -200,17 +210,18 @@ def main() -> None:
     query = sub.add_parser("search", help="向量检索")
     query.add_argument("text", help="查询语句")
     query.add_argument("-k", type=int, default=None, help="返回条数，默认取配置值")
+    demo = sub.add_parser("demo", help="检索演示（内置示例查询）")
+    demo.add_argument("-k", type=int, default=None, help="返回条数，默认取配置值")
     args = parser.parse_args()
 
     load_env()
     config = load_config()
 
-    if args.command == "search":
-        for rank, (score, chunk) in enumerate(
-            search(config, args.text, args.k or config.k), start=1
-        ):
-            print(f"{rank}. {score:.3f}  {chunk['source']}#{chunk['start']}-{chunk['end']}")
-            print(f"   {format_snippet(chunk['text'])}")
+    if args.command in {"search", "demo"}:
+        text = DEMO_QUERY if args.command == "demo" else args.text
+        if args.command == "demo":
+            print(f"查询: {text}")
+        print_hits(search(config, text, args.k or config.k))
         return
 
     chunks = load_chunks(config)
