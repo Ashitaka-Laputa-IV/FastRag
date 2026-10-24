@@ -6,7 +6,7 @@
   并把分数写进 Document.metadata
 - 参数来自 config/reranker.toml；API key 从 .env 的 SILICONFLOW_API_KEY 读取
 - 演示流程：BM25 召回 candidates 条 -> 重排 -> 输出 top_n 条
-  （`rerank_chunks` 同样可接收 RRF/向量检索的候选）
+  （`rerank_chunks` 只依赖 chunk 列表，可接任意检索器的候选）
 
 用法:
     uv run python -m fastrag.reranker "human in the loop approval"
@@ -28,12 +28,6 @@ from dataclasses import dataclass
 import httpx
 from langchain_core.documents import Document
 from langchain_reranker.rerankers import BaseReranker, RerankResult
-
-from fastrag.keyword_search import (
-    format_snippet,
-    load_config as load_search_config,
-    search as search_keywords,
-)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "reranker.toml"
@@ -153,6 +147,13 @@ def rerank_chunks(
 
 
 def main() -> None:
+    # 演示只用到关键词检索，导入放在 main 里，避免模块级依赖 bm25s
+    from fastrag.keyword_search import (
+        format_snippet,
+        load_config as load_search_config,
+        search as search_keywords,
+    )
+
     parser = argparse.ArgumentParser(description="对检索候选做重排")
     parser.add_argument("text", help="查询语句")
     parser.add_argument("-n", type=int, default=None, help="输出条数，默认取配置值")
