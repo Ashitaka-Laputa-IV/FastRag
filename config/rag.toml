@@ -1,13 +1,13 @@
 # RAG 流程编排参数。
-# LLM 参数见 config/llm.toml，重排参数见 config/reranker.toml。
+# LLM 参数见 config/llm.toml，重排参数见 config/reranker.toml，提示词见 prompts/。
 
 [retrieval]
 candidates = 20      # BM25 / 向量两路各召回的候选条数
 
 [fusion]
-k = 60               # RRF 平滑常数
-weights = [1.0, 1.0] # 两路权重（BM25、向量）
+method = "rerank"    # 融合排序方式：rrf | rerank
+k = 60               # method=rrf 时的平滑常数
+weights = [1.0, 1.0] # method=rrf 时两路权重（BM25、向量）
 
 [answer]
 context_n = 5        # 送入 LLM 的片段数
-use_rerank = true    # 融合后是否用交叉编码器重排
