@@ -8,22 +8,24 @@
 - 参数见 config/rag.toml；LLM 与重排参数分别见 config/llm.toml、config/reranker.toml
 
 用法:
-    uv run python -m fastrag.rag_graph
+    uv run python -m fastrag.rag_graph     # 交互式问答，回答流式输出
 
 输出示例:
     $ uv run python -m fastrag.rag_graph
-    问题: LangGraph 中如何实现 human-in-the-loop？
+    问题（回车退出）: LangGraph 中如何实现 human-in-the-loop？
     检索查询: LangGraph human-in-the-loop 实现方法
     来源:
       - data/langchain-docs/oss/python/langgraph/interrupts.md#0-1234
-    回答: ...
+    回答: 依据资料，...（逐 token 输出）
 """
 
+import asyncio
 import pathlib
 import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TypedDict
+import warnings
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
@@ -53,7 +55,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "rag.toml"
 PROMPTS_DIR = ROOT / "prompts"
 FUSION_METHODS = ("rrf", "rerank")
-DEMO_QUESTION = "LangGraph 中如何实现 human-in-the-loop？"
 
 
 class RAGState(TypedDict, total=False):
@@ -257,15 +258,52 @@ def run(question: str) -> RAGState:
     return get_pipeline().graph.invoke({"question": question})
 
 
-def main() -> None:
+async def stream_answer(question: str) -> None:
+    """跑一次问答，用 astream_events 流式输出回答。"""
+    graph = get_pipeline().graph
+    answer_started = False
+    async for event in graph.astream_events({"question": question}, version="v2"):
+        kind = event["event"]
+        node = (event.get("metadata") or {}).get("langgraph_node")
+        output = event.get("data", {}).get("output")
+        if kind == "on_chain_end" and event.get("name") == "requery":
+            if isinstance(output, dict) and output.get("search_query"):
+                print(f"检索查询: {output['search_query']}")
+        elif kind == "on_chain_end" and event.get("name") == "fuse":
+            fused = (output or {}).get("fused", [])
+            if fused:
+                print("来源:")
+                for chunk in fused:
+                    print(f"  - {chunk['source']}#{chunk['start']}-{chunk['end']}")
+            print("回答: ", end="", flush=True)
+            answer_started = True
+        elif kind == "on_chat_model_stream" and node == "answer":
+            if not answer_started:
+                print("回答: ", end="", flush=True)
+                answer_started = True
+            print(event["data"]["chunk"].text, end="", flush=True)
+    print("\n")
+
+
+async def chat() -> None:
+    """交互式问答：每行一个问题，空行退出。"""
     load_env()
-    result = run(DEMO_QUESTION)
-    print(f"问题: {DEMO_QUESTION}")
-    print(f"检索查询: {result.get('search_query') or '（未检索）'}")
-    print("来源:")
-    for chunk in result.get("fused", []):
-        print(f"  - {chunk['source']}#{chunk['start']}-{chunk['end']}")
-    print(f"回答: {result.get('answer', '')}")
+    get_pipeline()  # 先完成初始化，避免第一次输入时卡顿
+    while True:
+        try:
+            question = input("问题（回车退出）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not question:
+            break
+        await stream_answer(question)
+
+
+def main() -> None:
+    # structured output 的事件序列化会触发无害的 pydantic 警告
+    warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+    asyncio.run(chat())
 
 
 if __name__ == "__main__":
