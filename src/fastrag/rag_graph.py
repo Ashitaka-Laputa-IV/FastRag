@@ -252,11 +252,6 @@ def get_pipeline() -> Pipeline:
     return Pipeline(load_config())
 
 
-def run(question: str) -> RAGState:
-    """跑一次完整的 RAG 流程。"""
-    return get_pipeline().graph.invoke({"question": question})
-
-
 def main() -> None:
     """交互式问答：每行一个问题，空行退出；回答通过 stream_events 流式输出。"""
     load_env()
