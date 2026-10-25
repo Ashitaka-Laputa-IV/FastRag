@@ -1,9 +1,8 @@
 """用 langchain-reranker 对召回结果做重排。
 
-- 实现 langchain-reranker 的 `BaseReranker.rerank`，调用 SiliconFlow 的
+- 通过 `init_reranker("siliconflow:<model>", ...)` 创建重排器，走 SiliconFlow 的
   `/rerank` 接口（交叉编码器 Qwen/Qwen3-Reranker-4B）
-- 排序沿用 `BaseReranker.compress_documents`：按 relevance_score 降序，
-  并把分数写进 Document.metadata
+- 排序、top_n 与 relevance_score 写回 metadata 均由 `compress_documents` 提供
 - 参数来自 config/reranker.toml；API key 从 .env 的 SILICONFLOW_API_KEY 读取
 - 演示流程：BM25 召回 candidates 条 -> 重排 -> 输出 top_n 条
   （`rerank_chunks` 只依赖 chunk 列表，可接任意检索器的候选）
@@ -14,7 +13,7 @@
 输出示例:
     $ uv run python -m fastrag.reranker "human in the loop approval"
     查询: human in the loop approval
-    1. 0.9964  data/langchain-docs/oss/python/langchain/frontend/human-in-the-loop.md#0-2280  (bm25 #11)
+    1. 0.9962  data/langchain-docs/oss/python/langchain/frontend/human-in-the-loop.md#0-2280  (bm25 #11)
        > ## Documentation Index > Fetch the complete documentation index at: https://docs...
     ...
 """
@@ -25,13 +24,13 @@ import pathlib
 import tomllib
 from dataclasses import dataclass
 
-import httpx
-from langchain_core.documents import Document
-from langchain_reranker.rerankers import BaseReranker, RerankResult
+from langchain_core.documents import BaseDocumentCompressor, Document
+from langchain_reranker.rerankers import init_reranker
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "reranker.toml"
 ENV_PATH = ROOT / ".env"
+PROVIDER = "siliconflow"
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,6 @@ class RerankerConfig:
     """重排配置，对应 config/reranker.toml。"""
 
     model: str
-    base_url: str
     api_key_env: str
     timeout: float
     candidates: int
@@ -64,7 +62,6 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> RerankerConfig:
     reranker, retrieval = raw["reranker"], raw["retrieval"]
     return RerankerConfig(
         model=reranker["model"],
-        base_url=reranker["base_url"],
         api_key_env=reranker["api_key_env"],
         timeout=reranker["timeout"],
         candidates=retrieval["candidates"],
@@ -72,54 +69,13 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> RerankerConfig:
     )
 
 
-class SiliconFlowReranker(BaseReranker):
-    """通过 SiliconFlow 的 /rerank 接口做交叉编码器重排。"""
-
-    base_url: str
-    api_key: str
-    timeout: float = 60.0
-
-    def rerank(
-        self,
-        query: str,
-        documents: list[Document],
-        top_n: int | None = None,
-    ) -> list[RerankResult]:
-        """按相关性给 documents 打分并降序返回。"""
-        limit = top_n or self.top_n or len(documents)
-        payload = {
-            "model": self.model,
-            "query": query,
-            "documents": [document.page_content for document in documents],
-            "top_n": limit,
-            "return_documents": False,
-        }
-        with httpx.Client(timeout=self.timeout) as client:
-            response = client.post(
-                f"{self.base_url.rstrip('/')}/rerank",
-                json=payload,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-            )
-            response.raise_for_status()
-
-        return [
-            RerankResult(
-                index=item["index"],
-                relevance_score=float(item["relevance_score"]),
-                document=documents[item["index"]],
-            )
-            for item in response.json().get("results", [])
-        ]
-
-
-def build_reranker(config: RerankerConfig) -> SiliconFlowReranker:
-    """按配置建重排器，缺 key 时给出明确提示。"""
+def build_reranker(config: RerankerConfig) -> BaseDocumentCompressor:
+    """按配置创建重排器，缺 key 时给出明确提示。"""
     api_key = os.environ.get(config.api_key_env)
     if not api_key:
         raise SystemExit(f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写")
-    return SiliconFlowReranker(
-        model=config.model,
-        base_url=config.base_url,
+    return init_reranker(
+        f"{PROVIDER}:{config.model}",
         api_key=api_key,
         timeout=config.timeout,
         top_n=config.top_n,
@@ -127,7 +83,7 @@ def build_reranker(config: RerankerConfig) -> SiliconFlowReranker:
 
 
 def rerank_chunks(
-    reranker: SiliconFlowReranker, query: str, chunks: list[dict]
+    reranker: BaseDocumentCompressor, query: str, chunks: list[dict]
 ) -> list[Document]:
     """把候选 chunk 交给重排器，返回带 relevance_score 的文档（降序）。"""
     documents = [
