@@ -8,7 +8,7 @@
 - 参数见 config/rag.toml；LLM 与重排参数分别见 config/llm.toml、config/reranker.toml
 
 用法:
-    uv run python -m fastrag.rag_graph     # 交互式问答，回答流式输出
+    uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
 
 输出示例:
     $ uv run python -m fastrag.rag_graph
@@ -19,7 +19,6 @@
     回答: 依据资料，...（逐 token 输出）
 """
 
-import asyncio
 import pathlib
 import tomllib
 from dataclasses import dataclass
@@ -258,37 +257,16 @@ def run(question: str) -> RAGState:
     return get_pipeline().graph.invoke({"question": question})
 
 
-async def stream_answer(question: str) -> None:
-    """跑一次问答，用 astream_events 流式输出回答。"""
-    graph = get_pipeline().graph
-    answer_started = False
-    async for event in graph.astream_events({"question": question}, version="v2"):
-        kind = event["event"]
-        node = (event.get("metadata") or {}).get("langgraph_node")
-        output = event.get("data", {}).get("output")
-        if kind == "on_chain_end" and event.get("name") == "requery":
-            if isinstance(output, dict) and output.get("search_query"):
-                print(f"检索查询: {output['search_query']}")
-        elif kind == "on_chain_end" and event.get("name") == "fuse":
-            fused = (output or {}).get("fused", [])
-            if fused:
-                print("来源:")
-                for chunk in fused:
-                    print(f"  - {chunk['source']}#{chunk['start']}-{chunk['end']}")
-            print("回答: ", end="", flush=True)
-            answer_started = True
-        elif kind == "on_chat_model_stream" and node == "answer":
-            if not answer_started:
-                print("回答: ", end="", flush=True)
-                answer_started = True
-            print(event["data"]["chunk"].text, end="", flush=True)
-    print("\n")
-
-
-async def chat() -> None:
-    """交互式问答：每行一个问题，空行退出。"""
+def main() -> None:
+    """交互式问答：每行一个问题，空行退出；回答通过 stream_events 流式输出。"""
     load_env()
-    get_pipeline()  # 先完成初始化，避免第一次输入时卡顿
+    # structured output 的事件序列化会触发无害的 pydantic 警告
+    warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+    warnings.filterwarnings(
+        "ignore", message="The v3 streaming protocol on Pregel is experimental."
+    )
+    graph = get_pipeline().graph
+
     while True:
         try:
             question = input("问题（回车退出）: ").strip()
@@ -297,13 +275,21 @@ async def chat() -> None:
             break
         if not question:
             break
-        await stream_answer(question)
 
+        run = graph.stream_events({"question": question}, version="v3")
+        print("回答: ", end="", flush=True)
+        for stream in run.messages:
+            if stream.node != "answer":
+                continue
+            for delta in stream.text:
+                print(delta, end="", flush=True)
+        print()
 
-def main() -> None:
-    # structured output 的事件序列化会触发无害的 pydantic 警告
-    warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
-    asyncio.run(chat())
+        state = run.output or {}
+        if state.get("search_query"):
+            print(f"检索查询: {state['search_query']}")
+        for chunk in state.get("fused", []):
+            print(f"来源: {chunk['source']}#{chunk['start']}-{chunk['end']}")
 
 
 if __name__ == "__main__":
