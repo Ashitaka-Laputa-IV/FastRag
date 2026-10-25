@@ -223,6 +223,7 @@ dependencies = [
     { name = "chonkie" },
     { name = "langchain" },
     { name = "langchain-openai" },
+    { name = "langchain-reranker" },
     { name = "langgraph" },
     { name = "numpy" },
     { name = "tiktoken" },
@@ -234,6 +235,7 @@ requires-dist = [
     { name = "chonkie", specifier = ">=1.7.0" },
     { name = "langchain", specifier = ">=1.4.7" },
     { name = "langchain-openai", specifier = ">=1.7.2" },
+    { name = "langchain-reranker", specifier = ">=0.1.4" },
     { name = "langgraph", specifier = ">=1.2.17" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "tiktoken", specifier = ">=0.14.0" },
@@ -481,6 +483,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cb/8b/d908d082c3cf5368ddd1816ed114de79c873f979ba7f98b95fab0e841643/langchain_protocol-0.0.20.tar.gz", hash = "sha256:0f5bd002474265648e91161771a9e0438fe9480bd55a416e51af0f60070637ec", size = 6280, upload-time = "2026-10-20T11:13:50.84Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/4b/f1c99a0b27c5ff8b4b131c0d6e62012c17cc424089efe213767db927afd2/langchain_protocol-0.0.20-py3-none-any.whl", hash = "sha256:3c935e5e46b0f6f9cb52f45ba7cfa53d1b9fa80c82c4a277d47f03e07f7385b1", size = 7347, upload-time = "2026-10-20T11:13:49.566Z" },
+]
+
+[[package]]
+name = "langchain-reranker"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "langchain-core" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/29/c2fb4e3b62c65682011c6508d809209e5219ac854c3c83fd6b686cd11279/langchain_reranker-0.1.4.tar.gz", hash = "sha256:91d7875ea4a5f77a9e9223b43f4c91284d9431010459c84a126ce4893d5b4351", size = 7191, upload-time = "2026-10-24T13:25:02.398Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/79/213cf7c82cdef95bb258cac08726847457539436ca9751057225932d430f/langchain_reranker-0.1.4-py3-none-any.whl", hash = "sha256:e5e35165fa220f8f532b1542a4dc55a8da808d16faad735b88da20be5b3baaaf", size = 9838, upload-time = "2026-10-24T13:25:01.262Z" },
 ]
 
 [[package]]

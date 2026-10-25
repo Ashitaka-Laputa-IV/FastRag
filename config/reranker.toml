@@ -1,0 +1,12 @@
+# 重排（rerank）参数：先召回候选，再用交叉编码器重排。
+# API key 只从 .env 读取（与嵌入共用）。
+
+[reranker]
+model = "Qwen/Qwen3-Reranker-4B"
+base_url = "https://api.siliconflow.cn/v1"  # 任意 Cohere 风格的 /rerank 服务
+api_key_env = "SILICONFLOW_API_KEY"
+timeout = 60          # 单次请求超时（秒）
+
+[retrieval]
+candidates = 20       # BM25 召回的候选条数，全部参与重排
+top_n = 5             # 重排后输出条数

@@ -12,6 +12,7 @@ dependencies = [
     "chonkie>=1.7.0",
     "langchain>=1.4.7",
     "langchain-openai>=1.7.2",
+    "langchain-reranker>=0.1.4",
     "langgraph>=1.2.17",
     "numpy>=2.5.4",
     "tiktoken>=0.14.0",
