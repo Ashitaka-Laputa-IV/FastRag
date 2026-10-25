@@ -3,6 +3,7 @@
 
 [reranker]
 model = "Qwen/Qwen3-Reranker-4B"
+base_url = "https://api.siliconflow.cn/v1"  # 任意 Cohere 风格的 /rerank 服务
 api_key_env = "SILICONFLOW_API_KEY"
 timeout = 60          # 单次请求超时（秒）
 

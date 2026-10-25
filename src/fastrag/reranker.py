@@ -1,7 +1,7 @@
 """用 langchain-reranker 对召回结果做重排。
 
-- 通过 `init_reranker("siliconflow:<model>", ...)` 创建重排器，走 SiliconFlow 的
-  `/rerank` 接口（交叉编码器 Qwen/Qwen3-Reranker-4B）
+- 通过 `init_reranker("custom:<model>", base_url=..., api_key=...)` 创建重排器，
+  调用任意 Cohere 风格的 `/rerank` 接口（交叉编码器，默认配置指向 SiliconFlow）
 - 排序、top_n 与 relevance_score 写回 metadata 均由 `compress_documents` 提供
 - 参数来自 config/reranker.toml；API key 从 .env 的 SILICONFLOW_API_KEY 读取
 - 演示流程：BM25 召回 candidates 条 -> 重排 -> 输出 top_n 条
@@ -13,7 +13,7 @@
 输出示例:
     $ uv run python -m fastrag.reranker "human in the loop approval"
     查询: human in the loop approval
-    1. 0.9962  data/langchain-docs/oss/python/langchain/frontend/human-in-the-loop.md#0-2280  (bm25 #11)
+    1. 0.9964  data/langchain-docs/oss/python/langchain/frontend/human-in-the-loop.md#0-2280  (bm25 #11)
        > ## Documentation Index > Fetch the complete documentation index at: https://docs...
     ...
 """
@@ -30,7 +30,6 @@ from langchain_reranker.rerankers import init_reranker
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "reranker.toml"
 ENV_PATH = ROOT / ".env"
-PROVIDER = "siliconflow"
 
 
 @dataclass(frozen=True)
@@ -38,6 +37,7 @@ class RerankerConfig:
     """重排配置，对应 config/reranker.toml。"""
 
     model: str
+    base_url: str
     api_key_env: str
     timeout: float
     candidates: int
@@ -62,6 +62,7 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> RerankerConfig:
     reranker, retrieval = raw["reranker"], raw["retrieval"]
     return RerankerConfig(
         model=reranker["model"],
+        base_url=reranker["base_url"],
         api_key_env=reranker["api_key_env"],
         timeout=reranker["timeout"],
         candidates=retrieval["candidates"],
@@ -75,7 +76,8 @@ def build_reranker(config: RerankerConfig) -> BaseDocumentCompressor:
     if not api_key:
         raise SystemExit(f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写")
     return init_reranker(
-        f"{PROVIDER}:{config.model}",
+        f"custom:{config.model}",
+        base_url=config.base_url,
         api_key=api_key,
         timeout=config.timeout,
         top_n=config.top_n,
