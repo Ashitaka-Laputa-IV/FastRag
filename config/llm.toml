@@ -1,9 +1,0 @@
-# LLM 参数：通过 init_chat_model 走 OpenAI 兼容接口。
-# API key 只从 .env 读取（与嵌入/重排共用）。
-
-[llm]
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
-provider = "openai"                       # init_chat_model 的 model_provider
-base_url = "https://api.siliconflow.cn/v1"
-api_key_env = "SILICONFLOW_API_KEY"
-temperature = 0.7

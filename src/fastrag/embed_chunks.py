@@ -1,13 +1,14 @@
 """为切块后的 chunk 生成向量，并用固定问题演示一次向量检索。
 
-模型与接口由 config/embedding.toml 指定，代码与具体模型无关。
+模型与接口由 config/fastrag.toml 的 [embedding]、[api]、[paths] 指定，
+代码与具体模型无关。
 
-- 参数来自 config/embedding.toml；API key 只从 .env / 环境变量读取
+- API key 只从 .env / 环境变量读取
 - 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口）
 - 输入是 chunk_docs 产出的 data/chunks.jsonl，输出 data/embeddings/ 下的
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
 - 已嵌入且模型/语料未变时直接复用 vectors.npy，不重复请求接口
-- 运行结束用固定问题检索一次（余弦相似度，top-k 由配置决定），无需交互
+- 运行结束用固定问题检索一次（余弦相似度），默认返回 retrieval.top_n 条
 
 用法:
     uv run python -m fastrag.embed_chunks
@@ -26,85 +27,37 @@
 import datetime
 import json
 import os
-import pathlib
 import time
-import tomllib
-from dataclasses import dataclass
 
 import numpy as np
 from langchain_openai import OpenAIEmbeddings
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = ROOT / "config" / "embedding.toml"
-ENV_PATH = ROOT / ".env"
+from fastrag.config import ROOT, Config, load_config, load_env
+
 SNIPPET_CHARS = 160
 DEMO_QUERY = "human in the loop approval"
 
 
-@dataclass(frozen=True)
-class EmbeddingConfig:
-    """嵌入配置，对应 config/embedding.toml。"""
-
-    model: str
-    batch_size: int
-    dimensions: int
-    chunks_file: pathlib.Path
-    out_dir: pathlib.Path
-    base_url: str
-    api_key_env: str
-    timeout: float
-    max_retries: int
-    k: int
-
-
-def load_env(path: pathlib.Path = ENV_PATH) -> None:
-    """把 .env 里的键值写进环境变量（不覆盖已存在的值）。"""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-
-
-def load_config(path: pathlib.Path = CONFIG_PATH) -> EmbeddingConfig:
-    """读取 TOML 配置，并把相对路径解析到仓库根目录下。"""
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    model, paths, api, search = raw["model"], raw["paths"], raw["api"], raw["search"]
-    return EmbeddingConfig(
-        model=model["name"],
-        batch_size=model["batch_size"],
-        dimensions=model["dimensions"],
-        chunks_file=(ROOT / paths["chunks_file"]).resolve(),
-        out_dir=(ROOT / paths["out_dir"]).resolve(),
-        base_url=api["base_url"],
-        api_key_env=api["api_key_env"],
-        timeout=api["timeout"],
-        max_retries=api["max_retries"],
-        k=search["k"],
-    )
-
-
-def load_chunks(config: EmbeddingConfig) -> list[dict]:
+def load_chunks(config: Config) -> list[dict]:
     """读取 JSONL 形式的 chunk 语料。"""
-    with config.chunks_file.open(encoding="utf-8") as fh:
+    with config.paths.chunks_file.open(encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def build_embeddings(config: EmbeddingConfig) -> OpenAIEmbeddings:
+def build_embeddings(config: Config) -> OpenAIEmbeddings:
     """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。"""
-    api_key = os.environ.get(config.api_key_env)
+    api_key = os.environ.get(config.api.api_key_env)
     if not api_key:
-        raise SystemExit(f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写")
+        raise SystemExit(
+            f"缺少 {config.api.api_key_env}，请先 cp .env.example .env 并填写"
+        )
     return OpenAIEmbeddings(
-        model=config.model,
-        base_url=config.base_url,
+        model=config.embedding.model,
+        base_url=config.api.base_url,
         api_key=api_key,
-        chunk_size=config.batch_size,
-        max_retries=config.max_retries,
-        request_timeout=config.timeout,
+        chunk_size=config.embedding.batch_size,
+        max_retries=config.embedding.max_retries,
+        request_timeout=config.embedding.timeout,
         # 非 OpenAI 模型不做 tiktoken 预切分，交给服务端处理
         check_embedding_ctx_length=False,
     )
@@ -112,18 +65,19 @@ def build_embeddings(config: EmbeddingConfig) -> OpenAIEmbeddings:
 
 def embed_chunks(
     embeddings: OpenAIEmbeddings,
-    config: EmbeddingConfig,
+    config: Config,
     chunks: list[dict],
-    batch_size: int,
 ) -> np.ndarray:
     """分批嵌入全部 chunk，返回 (N, dimensions) 的 float32 矩阵。"""
-    vectors = np.zeros((len(chunks), config.dimensions), dtype=np.float32)
+    dimensions = config.embedding.dimensions
+    batch_size = config.embedding.batch_size
+    vectors = np.zeros((len(chunks), dimensions), dtype=np.float32)
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start : start + batch_size]
         batch_vectors = embeddings.embed_documents([chunk["text"] for chunk in batch])
-        if len(batch_vectors[0]) != config.dimensions:
+        if len(batch_vectors[0]) != dimensions:
             raise SystemExit(
-                f"返回维度 {len(batch_vectors[0])} 与配置 dimensions={config.dimensions} 不一致"
+                f"返回维度 {len(batch_vectors[0])} 与配置 dimensions={dimensions} 不一致"
             )
         vectors[start : start + len(batch)] = batch_vectors
         print(
@@ -135,31 +89,32 @@ def embed_chunks(
     return vectors
 
 
-def save_vectors(config: EmbeddingConfig, vectors: np.ndarray) -> None:
+def save_vectors(config: Config, vectors: np.ndarray) -> None:
     """落盘向量矩阵与元信息（对齐 chunks.jsonl 行序）。"""
-    config.out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(config.out_dir / "vectors.npy", vectors)
+    out_dir = config.paths.embeddings_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.save(out_dir / "vectors.npy", vectors)
     manifest = {
-        "model": config.model,
-        "dimensions": config.dimensions,
+        "model": config.embedding.model,
+        "dimensions": config.embedding.dimensions,
         "count": int(vectors.shape[0]),
-        "chunks_file": config.chunks_file.relative_to(ROOT).as_posix(),
+        "chunks_file": config.paths.chunks_file.relative_to(ROOT).as_posix(),
         "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
     }
-    (config.out_dir / "manifest.json").write_text(
+    (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
 
-def ensure_vectors(config: EmbeddingConfig, chunks: list[dict]) -> np.ndarray:
+def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
     """已有可用向量则直接加载，否则嵌入并落盘。"""
-    vectors_path = config.out_dir / "vectors.npy"
-    manifest_path = config.out_dir / "manifest.json"
+    vectors_path = config.paths.embeddings_dir / "vectors.npy"
+    manifest_path = config.paths.embeddings_dir / "manifest.json"
     if vectors_path.exists() and manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if (
-            manifest["model"] == config.model
-            and manifest["dimensions"] == config.dimensions
+            manifest["model"] == config.embedding.model
+            and manifest["dimensions"] == config.embedding.dimensions
             and manifest["count"] == len(chunks)
         ):
             print(f"复用已嵌入向量：{manifest['count']} 条 -> {vectors_path}")
@@ -169,17 +124,17 @@ def ensure_vectors(config: EmbeddingConfig, chunks: list[dict]) -> np.ndarray:
         print("未找到已嵌入向量，开始嵌入 ...")
 
     started = time.perf_counter()
-    vectors = embed_chunks(build_embeddings(config), config, chunks, config.batch_size)
+    vectors = embed_chunks(build_embeddings(config), config, chunks)
     save_vectors(config, vectors)
     print(
         f"{len(chunks)} 个 chunk -> {vectors.shape} float32，"
-        f"耗时 {time.perf_counter() - started:.1f}s -> {config.out_dir}"
+        f"耗时 {time.perf_counter() - started:.1f}s -> {config.paths.embeddings_dir}"
     )
     return vectors
 
 
 def search(
-    config: EmbeddingConfig,
+    config: Config,
     vectors: np.ndarray,
     chunks: list[dict],
     text: str,
@@ -219,7 +174,7 @@ def main() -> None:
     vectors = ensure_vectors(config, chunks)
 
     print(f"查询: {DEMO_QUERY}")
-    print_hits(search(config, vectors, chunks, DEMO_QUERY, config.k))
+    print_hits(search(config, vectors, chunks, DEMO_QUERY, config.retrieval.top_n))
 
 
 if __name__ == "__main__":

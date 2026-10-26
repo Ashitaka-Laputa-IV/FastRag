@@ -1,0 +1,50 @@
+# FastRAG 统一配置：路径、切块、嵌入、LLM、重排、检索与融合参数都在这里。
+# API key 只从 .env / 环境变量读取，不写进本文件。
+# 所有相对路径都相对仓库根目录。
+
+[paths]
+docs_dir = "data/langchain-docs"    # 输入文档目录
+chunks_file = "data/chunks.jsonl"   # chunk 语料，切块、嵌入、BM25 共用
+embeddings_dir = "data/embeddings"  # vectors.npy + manifest.json
+bm25_index_dir = "data/bm25-index"  # BM25 索引与 corpus
+
+[api]
+# 嵌入、LLM、重排共用一个 OpenAI / Cohere 兼容接口；换服务只改这里。
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+
+[chunking]
+# 长度一律按 token 计量（tiktoken 编码），便于对齐嵌入模型的上下文上限。
+tokenizer = "cl100k_base"  # tiktoken 编码名，与 OpenAI 嵌入模型一致
+chunk_size = 512           # 单块 token 上限（约 500）
+chunk_overlap = 128        # 相邻块重叠 token 数（约 25%）
+include_delim = "prev"     # 句末分隔符归入前一块，保证 text == 原文[start:end]
+
+[embedding]
+model = "Qwen/Qwen3-Embedding-4B"
+batch_size = 32   # 单次请求的文本条数
+dimensions = 2560 # Qwen3-Embedding-4B 输出维度
+timeout = 120     # 单次请求超时（秒）
+max_retries = 3
+
+[llm]
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+provider = "openai"  # init_chat_model 的 model_provider
+temperature = 0.7
+
+[reranker]
+model = "Qwen/Qwen3-Reranker-4B"
+timeout = 60  # 单次请求超时（秒）
+
+[bm25]
+stopwords = "english"  # bm25s 内置停用词（"english"/"en" 或自定义列表）
+method = "lucene"      # 打分方法：lucene / robertson / atire / bm25l / bm25+
+
+[retrieval]
+candidates = 20  # BM25 / 向量两路各召回的候选条数
+top_n = 5        # 最终送入 LLM 的片段数，也是各命令行工具的默认返回条数
+
+[fusion]
+method = "rrf"       # 融合排序方式：rrf | rerank
+rrf_k = 60           # method=rrf 时的平滑常数：score = Σ w / (rrf_k + rank)
+weights = [1.0, 1.0] # method=rrf 时两路权重（BM25、向量）

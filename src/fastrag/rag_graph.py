@@ -5,7 +5,7 @@
 
 - 流程图见 README.md
 - 提示词单独放在 prompts/，便于迭代
-- 参数见 config/rag.toml；LLM 与重排参数分别见 config/llm.toml、config/reranker.toml
+- 参数统一见 config/fastrag.toml
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -19,41 +19,23 @@
     回答: 依据资料，...（逐 token 输出）
 """
 
-import pathlib
-import tomllib
-from dataclasses import dataclass
+import warnings
 from functools import lru_cache
 from typing import TypedDict
-import warnings
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from fastrag.embed_chunks import (
-    ensure_vectors,
-    load_chunks as load_embedding_chunks,
-    load_config as load_embedding_config,
-    load_env,
-    search as search_vectors,
-)
-from fastrag.keyword_search import (
-    load_config as load_keyword_config,
-    search as search_keywords,
-)
-from fastrag.llm import build_llm, load_config as load_llm_config
-from fastrag.reranker import (
-    build_reranker,
-    load_config as load_reranker_config,
-    rerank_chunks,
-)
+from fastrag.config import ROOT, Config, load_config, load_env
+from fastrag.embed_chunks import ensure_vectors, load_chunks, search as search_vectors
+from fastrag.keyword_search import search as search_keywords
+from fastrag.llm import build_llm
+from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = ROOT / "config" / "rag.toml"
 PROMPTS_DIR = ROOT / "prompts"
-FUSION_METHODS = ("rrf", "rerank")
 
 
 class RAGState(TypedDict, total=False):
@@ -80,32 +62,6 @@ class SearchQuery(BaseModel):
     query: str = Field(description="改写后、适合文档检索的查询")
 
 
-@dataclass(frozen=True)
-class RAGConfig:
-    """RAG 配置，对应 config/rag.toml。"""
-
-    candidates: int
-    method: str
-    k: int
-    weights: tuple[float, ...]
-    context_n: int
-
-
-def load_config(path: pathlib.Path = CONFIG_PATH) -> RAGConfig:
-    """读取 TOML 配置，并校验融合方式。"""
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    retrieval, fusion, answer = raw["retrieval"], raw["fusion"], raw["answer"]
-    if fusion["method"] not in FUSION_METHODS:
-        raise SystemExit(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
-    return RAGConfig(
-        candidates=retrieval["candidates"],
-        method=fusion["method"],
-        k=fusion["k"],
-        weights=tuple(fusion["weights"]),
-        context_n=answer["context_n"],
-    )
-
-
 def load_prompt(name: str) -> str:
     """读取 prompts/ 下的提示词模板。"""
     return (PROMPTS_DIR / f"{name}.txt").read_text(encoding="utf-8")
@@ -114,23 +70,19 @@ def load_prompt(name: str) -> str:
 class Pipeline:
     """把图需要的配置与检索资源准备好，节点函数通过闭包使用。"""
 
-    def __init__(self, config: RAGConfig):
+    def __init__(self, config: Config):
         load_env()
         self.config = config
-        self.llm: BaseChatModel = build_llm(load_llm_config())
+        self.llm: BaseChatModel = build_llm(config)
         self.decide_chain = self.llm.with_structured_output(SearchDecision)
         self.requery_chain = self.llm.with_structured_output(SearchQuery)
         self.prompts = {
             name: load_prompt(name) for name in ("decide_search", "requery", "answer")
         }
-        self.keyword_config = load_keyword_config()
-        self.embedding_config = load_embedding_config()
-        self.chunks = load_embedding_chunks(self.embedding_config)
-        self.vectors = ensure_vectors(self.embedding_config, self.chunks)
+        self.chunks = load_chunks(config)
+        self.vectors = ensure_vectors(config, self.chunks)
         self.reranker = (
-            build_reranker(load_reranker_config())
-            if config.method == "rerank"
-            else None
+            build_reranker(config) if config.fusion.method == "rerank" else None
         )
         self.graph = self._build_graph()
 
@@ -151,18 +103,18 @@ class Pipeline:
     def retrieve_bm25(self, state: RAGState) -> dict:
         """BM25 关键词召回。"""
         hits = search_keywords(
-            self.keyword_config, state["search_query"], self.config.candidates
+            self.config, state["search_query"], self.config.retrieval.candidates
         )
         return {"bm25": [chunk for _, chunk in hits]}
 
     def retrieve_vector(self, state: RAGState) -> dict:
         """向量语义召回。"""
         hits = search_vectors(
-            self.embedding_config,
+            self.config,
             self.vectors,
             self.chunks,
             state["search_query"],
-            self.config.candidates,
+            self.config.retrieval.candidates,
         )
         return {"vector": [chunk for _, chunk in hits]}
 
@@ -170,17 +122,22 @@ class Pipeline:
         """按配置的融合方式（rrf / rerank）排序两路召回结果。"""
         bm25 = state.get("bm25", [])
         vector = state.get("vector", [])
-        if self.config.method == "rerank":
+        top_n = self.config.retrieval.top_n
+        if self.config.fusion.method == "rerank":
             merged = self._merge(bm25, vector)
             documents = rerank_chunks(self.reranker, state["question"], merged)
-            return {"fused": [self._to_chunk(document) for document in documents]}
+            return {
+                "fused": [self._to_chunk(document) for document in documents[:top_n]]
+            }
 
-        fused = rrf_fuse([bm25, vector], self.config.k, self.config.weights)
-        return {"fused": [chunk for _, chunk in fused][: self.config.context_n]}
+        fused = rrf_fuse(
+            [bm25, vector], self.config.fusion.rrf_k, self.config.fusion.weights
+        )
+        return {"fused": [chunk for _, chunk in fused][:top_n]}
 
     def answer(self, state: RAGState) -> dict:
         """把检索片段拼进 prompt，让 LLM 依据资料作答。"""
-        chunks = state.get("fused", [])[: self.config.context_n]
+        chunks = state.get("fused", [])[: self.config.retrieval.top_n]
         context = (
             "\n\n".join(
                 f"[{index}] {chunk['source']}\n{chunk['text']}"

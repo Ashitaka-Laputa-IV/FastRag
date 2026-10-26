@@ -1,8 +1,8 @@
 """用 init_chat_model 创建一个通用对话模型。
 
-- 模型、provider、base_url 等由 config/llm.toml 指定，代码与具体模型无关
+- 模型、provider、temperature 来自 config/fastrag.toml 的 [llm]
+- 接口地址与 key 环境变量来自 [api]；API key 只从 .env 读取
 - provider 交给 langchain 的 `init_chat_model`，默认走 OpenAI 兼容接口
-- API key 只从 .env 读取
 - main 用一个固定问题做一次最简单的问答，无交互
 
 用法:
@@ -15,65 +15,28 @@
 """
 
 import os
-import pathlib
-import tomllib
-from dataclasses import dataclass
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = ROOT / "config" / "llm.toml"
-ENV_PATH = ROOT / ".env"
+from fastrag.config import Config, load_config, load_env
+
 DEMO_QUESTION = "用一句话解释什么是 RAG。"
 
 
-@dataclass(frozen=True)
-class LLMConfig:
-    """LLM 配置，对应 config/llm.toml。"""
-
-    model: str
-    provider: str
-    base_url: str
-    api_key_env: str
-    temperature: float
-
-
-def load_env(path: pathlib.Path = ENV_PATH) -> None:
-    """把 .env 里的键值写进环境变量（不覆盖已存在的值）。"""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-
-
-def load_config(path: pathlib.Path = CONFIG_PATH) -> LLMConfig:
-    """读取 TOML 配置。"""
-    llm = tomllib.loads(path.read_text(encoding="utf-8"))["llm"]
-    return LLMConfig(
-        model=llm["model"],
-        provider=llm["provider"],
-        base_url=llm["base_url"],
-        api_key_env=llm["api_key_env"],
-        temperature=llm["temperature"],
-    )
-
-
-def build_llm(config: LLMConfig) -> BaseChatModel:
+def build_llm(config: Config) -> BaseChatModel:
     """按配置创建对话模型，缺 key 时给出明确提示。"""
-    api_key = os.environ.get(config.api_key_env)
+    api_key = os.environ.get(config.api.api_key_env)
     if not api_key:
-        raise SystemExit(f"缺少 {config.api_key_env}，请先 cp .env.example .env 并填写")
+        raise SystemExit(
+            f"缺少 {config.api.api_key_env}，请先 cp .env.example .env 并填写"
+        )
     return init_chat_model(
-        config.model,
-        model_provider=config.provider,
-        base_url=config.base_url,
+        config.llm.model,
+        model_provider=config.llm.provider,
+        base_url=config.api.base_url,
         api_key=api_key,
-        temperature=config.temperature,
+        temperature=config.llm.temperature,
     )
 
 
