@@ -147,6 +147,7 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u http
   4. 对常见问题缓存规划结果。
 - 召回（约 0.14 s）与融合（0.1 ms）在新口径下已经可以忽略。
 - 各模型单独的首 token 时延对比见 [`llm-ttft.md`](llm-ttft.md)（本地 `qwen3-4b-instruct` 30 ms，云端最快约 230 ms）。
+- 整条链路全本地（bge-m3 + qwen3-4b-instruct）的端到端首 token 见 [`bench-all-local.md`](bench-all-local.md)（中位数 2508 ms，比云端快约 3 倍）。
 
 ## 7. 数据留档与复现
 

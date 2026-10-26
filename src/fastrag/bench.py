@@ -19,6 +19,7 @@
     uv run python -m fastrag.bench --full-generation
     uv run python -m fastrag.bench --route-model Qwen/Qwen3.5-35B-A3B
     uv run python -m fastrag.bench --no-route-thinking
+    uv run python -m fastrag.bench --config config/fastrag.local.toml
     uv run python -m fastrag.bench --json data/bench/results.json
 
 输出示例:
@@ -212,6 +213,11 @@ def main() -> None:
         "--answer-endpoint", help="覆盖 [llm.answer].endpoint"
     )
     parser.add_argument(
+        "--config",
+        type=pathlib.Path,
+        help="使用的配置文件（默认 config/fastrag.toml；可用 config/fastrag.local.toml 跑全本地）",
+    )
+    parser.add_argument(
         "--route-thinking",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -226,7 +232,7 @@ def main() -> None:
 
     first_token_only = not args.full_generation
     answer_thinking = args.thinking
-    config = load_config()
+    config = load_config(args.config) if args.config else load_config()
 
     def endpoint(name: str):
         try:

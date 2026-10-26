@@ -99,6 +99,7 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u http
 
 - 本文只测模型本身。RAG 链路里「生成」还包含拼上下文与请求往返，「检索规划」还包含结构化输出解析，所以链路里的耗时一定更高。
 - 链路口径的数据见 [`bench-first-token.md`](bench-first-token.md)：关思考后，生成阶段首 token 中位数 491 ms，检索规划中位数 6937 ms。
+- 全本地链路（bge-m3 + qwen3-4b-instruct）的端到端首 token 中位数 2508 ms，见 [`bench-all-local.md`](bench-all-local.md)。
 - 换成 200–400 ms 档的模型只能改善链路里约 0.6 s 的规划耗时，无法解决检索规划占 90% 的结构性问题；要降低端到端还得减少规划的输出或调用次数。
 
 ## 5. 局限

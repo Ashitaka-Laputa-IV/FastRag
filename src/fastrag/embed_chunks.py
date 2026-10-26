@@ -48,10 +48,13 @@ def build_embeddings(config: Config) -> OpenAIEmbeddings:
     """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。"""
     api_key = os.environ.get(config.embedding.endpoint.api_key_env)
     if not api_key:
-        raise SystemExit(
-            f"缺少 {config.embedding.endpoint.api_key_env}，"
-            "请先 cp .env.example .env 并填写"
-        )
+        if config.embedding.endpoint.api_key_env:
+            raise SystemExit(
+                f"缺少 {config.embedding.endpoint.api_key_env}，"
+                "请先 cp .env.example .env 并填写"
+            )
+        # 本地服务通常不校验 key，SDK 又要求非空，给一个占位值
+        api_key = "local"
     return OpenAIEmbeddings(
         model=config.embedding.model,
         base_url=config.embedding.endpoint.base_url,
