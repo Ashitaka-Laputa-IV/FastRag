@@ -5,7 +5,7 @@
 candidates = 20      # BM25 / 向量两路各召回的候选条数
 
 [fusion]
-method = "rerank"    # 融合排序方式：rrf | rerank
+method = "rrf"       # 融合排序方式：rrf | rerank
 k = 60               # method=rrf 时的平滑常数
 weights = [1.0, 1.0] # method=rrf 时两路权重（BM25、向量）
 

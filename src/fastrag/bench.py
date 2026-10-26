@@ -1,7 +1,7 @@
 """对 RAG 各阶段做耗时基准测试。
 
-固定 3 个问题，每个问题跑 runs 次（默认 3），统计路由、问题重写、召回、重排、
-生成的耗时；跑完输出 Markdown 表格，并把明细写入 JSON 方便复查。
+固定 3 个问题，每个问题跑 runs 次（默认 3），统计路由、问题重写、召回、
+融合/重排、生成的耗时；跑完输出 Markdown 表格，并把明细写入 JSON 方便复查。
 
 - 耗时由 rag_graph 的节点装饰器记录在 state["timings"]（毫秒）
 - 召回是 BM25 与向量两路并行，阶段耗时取较慢的一路
@@ -18,7 +18,7 @@
     [1/9] LangGraph 中如何实现 human-in-the-loop？ 4213 ms
     ...
     ## 全部 9 次
-    | 阶段 | 平均 (ms) | 最小 (ms) | 最大 (ms) | 标准差 (ms) |
+    | 阶段 | 平均 (ms) | 中位数 (ms) | 最小 (ms) | 最大 (ms) | 标准差 (ms) |
     ...
 """
 
@@ -39,7 +39,7 @@ QUESTIONS = (
     "LangChain 的 Agent 如何调用工具？",
 )
 RUNS = 3
-STAGES = ("route", "requery", "retrieve", "rerank", "generate")
+STAGES = ("route", "requery", "retrieve", "fusion", "generate")
 
 
 def measure(timings: dict[str, float]) -> dict[str, float]:
@@ -50,7 +50,8 @@ def measure(timings: dict[str, float]) -> dict[str, float]:
         "retrieve": max(
             timings.get("retrieve_bm25", 0.0), timings.get("retrieve_vector", 0.0)
         ),
-        "rerank": timings.get("rerank", timings.get("fusion", 0.0)),
+        # method=rerank 时节点记作 rerank，method=rrf 时记作 fusion
+        "fusion": timings.get("rerank", timings.get("fusion", 0.0)),
         "generate": timings.get("generate", 0.0),
     }
 
@@ -94,7 +95,11 @@ def summarize(records: list[dict]) -> dict:
     return {"per_question": per_question, "overall": overall}
 
 
-def markdown_table(stages: dict[str, dict[str, float]], wall: dict[str, float]) -> str:
+def markdown_table(
+    stages: dict[str, dict[str, float]],
+    wall: dict[str, float],
+    labels: dict[str, str],
+) -> str:
     """把一组统计结果排成 Markdown 表格。"""
     lines = [
         "| 阶段 | 平均 (ms) | 中位数 (ms) | 最小 (ms) | 最大 (ms) | 标准差 (ms) |",
@@ -103,7 +108,7 @@ def markdown_table(stages: dict[str, dict[str, float]], wall: dict[str, float]) 
     for stage in STAGES:
         item = stages[stage]
         lines.append(
-            f"| {STAGE_LABELS[stage]} | {item['mean']:.1f} | {item['median']:.1f} "
+            f"| {labels[stage]} | {item['mean']:.1f} | {item['median']:.1f} "
             f"| {item['min']:.1f} | {item['max']:.1f} | {item['stdev']:.1f} |"
         )
     lines.append(
@@ -113,14 +118,14 @@ def markdown_table(stages: dict[str, dict[str, float]], wall: dict[str, float]) 
     return "\n".join(lines)
 
 
-def print_report(summary: dict) -> None:
+def print_report(summary: dict, labels: dict[str, str]) -> None:
     """按问题输出表格，最后输出全部运行的汇总。"""
     for index, item in enumerate(summary["per_question"], start=1):
         print(f"\n### 问题 {index}：{item['question']}（{item['runs']} 次）")
-        print(markdown_table(item["stages"], item["wall"]))
+        print(markdown_table(item["stages"], item["wall"], labels))
     overall = summary["overall"]
     print(f"\n### 全部 {overall['runs']} 次运行")
-    print(markdown_table(overall["stages"], overall["wall"]))
+    print(markdown_table(overall["stages"], overall["wall"], labels))
 
 
 def run(
@@ -186,13 +191,17 @@ def main() -> None:
         "candidates": config.candidates,
         "context_n": config.context_n,
     }
+    labels = {
+        **STAGE_LABELS,
+        "fusion": "重排" if config.method == "rerank" else "融合",
+    }
 
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.json.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(f"\n明细已写入 {args.json}")
-    print_report(payload["summary"])
+    print_report(payload["summary"], labels)
 
 
 if __name__ == "__main__":
