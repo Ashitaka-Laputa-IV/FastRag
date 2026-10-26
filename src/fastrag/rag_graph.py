@@ -127,6 +127,9 @@ class Pipeline:
         """按配置的融合方式（rrf / rerank）排序两路召回结果。"""
         bm25 = state.get("bm25", [])
         vector = state.get("vector", [])
+        if not bm25 and not vector:
+            return {"fused": []}
+
         top_n = self.config.retrieval.top_n
         if self.config.fusion.method == "rerank":
             merged = self._merge(bm25, vector)
