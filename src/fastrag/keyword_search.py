@@ -42,8 +42,17 @@ def build_index(config: Config) -> None:
     print(f"{len(chunks)} 个 chunk 已建索引 -> {config.paths.bm25_index_dir}")
 
 
-def search(config: Config, text: str, k: int) -> list[tuple[float, dict]]:
-    """返回 top-k 命中 chunk 及其分数（降序）。"""
+def search(
+    config: Config,
+    text: str,
+    k: int,
+    min_score: float | None = None,
+) -> list[tuple[float, dict]]:
+    """返回 top-k 命中 chunk 及其分数（降序）。
+
+    min_score 为 None 时取 config.bm25.min_score；只保留 score > min_score 的命中，
+    默认过滤掉零分文档，避免无关键词命中的 chunk 进入融合。
+    """
     index_dir = config.paths.bm25_index_dir
     if not index_dir.exists():
         raise SystemExit("索引不存在，请先运行: uv run python -m fastrag.keyword_search build")
@@ -55,7 +64,9 @@ def search(config: Config, text: str, k: int) -> list[tuple[float, dict]]:
     results, scores = retriever.retrieve(
         query_tokens, k=min(k, len(retriever.corpus)), show_progress=False
     )
-    return [(float(score), chunk) for score, chunk in zip(scores[0], results[0])]
+    threshold = config.bm25.min_score if min_score is None else min_score
+    hits = [(float(score), chunk) for score, chunk in zip(scores[0], results[0])]
+    return [hit for hit in hits if hit[0] > threshold]
 
 
 def format_snippet(text: str) -> str:

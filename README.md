@@ -11,6 +11,7 @@ API key 只从 `.env` 读取；每个 endpoint 用 `api_key_env` 指定自己的
 
 - `[endpoints.*]`：厂家接入信息（`base_url` + `api_key_env`），嵌入、重排、各 LLM 角色都可引用不同厂家
 - `[llm.route]` / `[llm.requery]` / `[llm.answer]`：路由、问题重写、生成三个角色可分别配置模型、厂家与温度
+- `[bm25]`：停用词、打分方法与 `min_score`；默认过滤掉分数不大于 0 的命中
 - `retrieval.bm25_candidates` / `retrieval.vector_candidates`：BM25 与向量两路各自的召回条数
 - `retrieval.top_n`：最终送入 LLM 的片段数，也是各命令行工具的默认返回条数
 - `fusion.method`：`rrf`（默认）或 `rerank`
