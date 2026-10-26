@@ -17,6 +17,8 @@
     uv run python -m fastrag.bench --runs 5
     uv run python -m fastrag.bench --thinking
     uv run python -m fastrag.bench --full-generation
+    uv run python -m fastrag.bench --route-model Qwen/Qwen3.5-35B-A3B
+    uv run python -m fastrag.bench --no-route-thinking
     uv run python -m fastrag.bench --json data/bench/results.json
 
 输出示例:
@@ -31,6 +33,7 @@
 """
 
 import argparse
+import dataclasses
 import datetime
 import json
 import pathlib
@@ -38,7 +41,7 @@ import statistics
 import time
 
 from fastrag.config import load_config
-from fastrag.rag_graph import STAGE_LABELS, Pipeline, get_pipeline
+from fastrag.rag_graph import STAGE_LABELS, Pipeline
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 DEFAULT_JSON = ROOT / "data" / "bench" / "results.json"
@@ -197,6 +200,24 @@ def main() -> None:
         help="保留回答模型的思考过程（默认关闭，首 token 即回答正文）",
     )
     parser.add_argument(
+        "--route-model", help="覆盖 [llm.route].model，用于对比不同规划模型"
+    )
+    parser.add_argument(
+        "--answer-model", help="覆盖 [llm.answer].model"
+    )
+    parser.add_argument(
+        "--route-endpoint", help="覆盖 [llm.route].endpoint（引用 [endpoints.*] 的名字）"
+    )
+    parser.add_argument(
+        "--answer-endpoint", help="覆盖 [llm.answer].endpoint"
+    )
+    parser.add_argument(
+        "--route-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="覆盖 [llm.route].thinking（默认沿用配置）",
+    )
+    parser.add_argument(
         "--json", type=pathlib.Path, default=DEFAULT_JSON, help="明细输出路径"
     )
     args = parser.parse_args()
@@ -206,9 +227,35 @@ def main() -> None:
     first_token_only = not args.full_generation
     answer_thinking = args.thinking
     config = load_config()
+
+    def endpoint(name: str):
+        try:
+            return config.endpoints[name]
+        except KeyError:
+            raise SystemExit(
+                f"endpoint {name!r} 未在 [endpoints] 中定义，可选: "
+                + ", ".join(sorted(config.endpoints))
+            ) from None
+
+    route, answer = config.llm.route, config.llm.answer
+    if args.route_model:
+        route = dataclasses.replace(route, model=args.route_model)
+    if args.route_endpoint:
+        route = dataclasses.replace(route, endpoint=endpoint(args.route_endpoint))
+    if args.route_thinking is not None:
+        route = dataclasses.replace(route, thinking=args.route_thinking)
+    if args.answer_model:
+        answer = dataclasses.replace(answer, model=args.answer_model)
+    if args.answer_endpoint:
+        answer = dataclasses.replace(answer, endpoint=endpoint(args.answer_endpoint))
+    config = dataclasses.replace(
+        config, llm=dataclasses.replace(config.llm, route=route, answer=answer)
+    )
     started = time.perf_counter()
-    pipeline = get_pipeline(
-        first_token_only=first_token_only, answer_thinking=answer_thinking
+    pipeline = Pipeline(
+        config,
+        first_token_only=first_token_only,
+        answer_thinking=answer_thinking,
     )
     init_ms = (time.perf_counter() - started) * 1000
     print(f"初始化完成 {init_ms:.0f} ms（模型、向量、索引、重排器，不计入统计）")
@@ -218,9 +265,20 @@ def main() -> None:
         + "，回答模型思考: "
         + ("开启" if answer_thinking else "关闭")
     )
+    print(
+        f"模型: 规划 {config.llm.route.model}（思考"
+        + ("开启" if config.llm.route.thinking else "关闭")
+        + f"），回答 {config.llm.answer.model}"
+    )
 
     payload = run(pipeline, QUESTIONS, args.runs, init_ms)
     payload["config"] = {
+        "route_model": config.llm.route.model,
+        "route_endpoint": config.llm.route.endpoint.base_url,
+        "route_thinking": config.llm.route.thinking,
+        "answer_model": config.llm.answer.model,
+        "answer_endpoint": config.llm.answer.endpoint.base_url,
+        "answer_thinking": answer_thinking,
         "fusion_method": config.fusion.method,
         "rrf_k": config.fusion.rrf_k,
         "fusion_weights": list(config.fusion.weights),

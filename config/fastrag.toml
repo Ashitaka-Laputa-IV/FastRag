@@ -19,6 +19,12 @@ api_key_env = "SILICONFLOW_API_KEY"
 # base_url = "https://api.openai.com/v1"
 # api_key_env = "OPENAI_API_KEY"
 
+[endpoints.local]
+# 本地 llama.cpp（easy-start-llama）的 OpenAI 兼容接口，不校验 key，
+# 所以 api_key_env 留空；base_url 与端口按本地实际服务填写。
+base_url = "http://127.0.0.1:9938/v1"
+api_key_env = ""
+
 [chunking]
 # 长度一律按 token 计量（tiktoken 编码），便于对齐嵌入模型的上下文上限。
 tokenizer = "cl100k_base"  # tiktoken 编码名，与 OpenAI 嵌入模型一致

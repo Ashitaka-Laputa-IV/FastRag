@@ -25,20 +25,27 @@ from fastrag.config import LLMConfig, load_config, load_env
 DEMO_QUESTION = "用一句话解释什么是 RAG。"
 
 
-def build_llm(config: LLMConfig, thinking: bool | None = None) -> BaseChatModel:
+def build_llm(
+    config: LLMConfig, thinking: bool | None = None, timeout: float | None = None
+) -> BaseChatModel:
     """按角色配置创建对话模型，缺 key 时给出明确提示。
 
     thinking 覆盖配置里的 llm.*.thinking；关掉思考时传
     `extra_body={"enable_thinking": False}`（SiliconFlow 等 OpenAI 兼容接口）。
-    开启时不下发该参数，沿用厂家默认行为。
+    开启时不下发该参数，沿用厂家默认行为。timeout 为单次请求超时（秒）。
     """
     api_key = os.environ.get(config.endpoint.api_key_env)
     if not api_key:
-        raise SystemExit(
-            f"缺少 {config.endpoint.api_key_env}，请先 cp .env.example .env 并填写"
-        )
+        if config.endpoint.api_key_env:
+            raise SystemExit(
+                f"缺少 {config.endpoint.api_key_env}，请先 cp .env.example .env 并填写"
+            )
+        # 本地服务通常不校验 key，SDK 又要求非空，给一个占位值
+        api_key = "local"
     enabled = config.thinking if thinking is None else thinking
     extra = {} if enabled else {"extra_body": {"enable_thinking": False}}
+    if timeout is not None:
+        extra["timeout"] = timeout
     return init_chat_model(
         config.model,
         model_provider=config.provider,

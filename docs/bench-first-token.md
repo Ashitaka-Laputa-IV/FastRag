@@ -146,6 +146,7 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u http
   3. 换更小/更快的模型做规划，失败再回退；
   4. 对常见问题缓存规划结果。
 - 召回（约 0.14 s）与融合（0.1 ms）在新口径下已经可以忽略。
+- 各模型单独的首 token 时延对比见 [`llm-ttft.md`](llm-ttft.md)（本地 `qwen3-4b-instruct` 30 ms，云端最快约 230 ms）。
 
 ## 7. 数据留档与复现
 
