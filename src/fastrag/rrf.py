@@ -4,9 +4,10 @@
     score(d) = Σ_i w_i / (k + rank_i(d))
 
 其中 rank_i(d) 是文档 d 在第 i 路排名中的名次（从 1 开始），k 是平滑常数
-（默认 60），w_i 是各路权重；只出现在单路的文档同样按该式计分。
+（配置项 fusion.rrf_k，默认 60），w_i 是各路权重；只出现在单路的文档
+同样按该式计分。
 
-- 参数来自 config/rrf.toml（k、权重、每路候选数、输出条数）
+- 参数来自 config/fastrag.toml（[fusion]、[retrieval]）
 - 两路候选：keyword_search（BM25）与 embed_chunks（向量余弦相似度）
 - 用法:
     uv run python -m fastrag.rrf "human in the loop approval"
@@ -20,47 +21,18 @@
 """
 
 import argparse
-import pathlib
-import tomllib
-from dataclasses import dataclass
 from typing import Sequence
 
+from fastrag.config import load_config, load_env
 from fastrag.embed_chunks import (
     ensure_vectors,
     load_chunks,
-    load_config as load_embedding_config,
-    load_env,
     search as search_vectors,
 )
 from fastrag.keyword_search import (
     format_snippet,
-    load_config as load_keyword_config,
     search as search_keywords,
 )
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = ROOT / "config" / "rrf.toml"
-
-
-@dataclass(frozen=True)
-class FusionConfig:
-    """融合配置，对应 config/rrf.toml。"""
-
-    k: int
-    weights: tuple[float, ...]
-    candidates: int
-    top_n: int
-
-
-def load_config(path: pathlib.Path = CONFIG_PATH) -> FusionConfig:
-    """读取 TOML 配置。"""
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))["fusion"]
-    return FusionConfig(
-        k=raw["k"],
-        weights=tuple(raw["weights"]),
-        candidates=raw["candidates"],
-        top_n=raw["top_n"],
-    )
 
 
 def rrf_fuse(
@@ -95,20 +67,19 @@ def main() -> None:
     parser.add_argument("-n", type=int, default=None, help="输出条数，默认取配置值")
     args = parser.parse_args()
 
-    fusion = load_config()
-
-    bm25_hits = search_keywords(load_keyword_config(), args.text, fusion.candidates)
-
     load_env()
-    embedding_config = load_embedding_config()
-    chunks = load_chunks(embedding_config)
-    vectors = ensure_vectors(embedding_config, chunks)
+    config = load_config()
+
+    bm25_hits = search_keywords(config, args.text, config.retrieval.bm25_candidates)
+
+    chunks = load_chunks(config)
+    vectors = ensure_vectors(config, chunks)
     vector_hits = search_vectors(
-        embedding_config, vectors, chunks, args.text, fusion.candidates
+        config, vectors, chunks, args.text, config.retrieval.vector_candidates
     )
 
     rankings = [[chunk for _, chunk in bm25_hits], [chunk for _, chunk in vector_hits]]
-    fused = rrf_fuse(rankings, fusion.k, fusion.weights)
+    fused = rrf_fuse(rankings, config.fusion.rrf_k, config.fusion.weights)
 
     names = ("bm25", "向量")
     ranks = [
@@ -116,7 +87,9 @@ def main() -> None:
         for ranking in rankings
     ]
     print(f"查询: {args.text}")
-    for rank, (score, chunk) in enumerate(fused[: args.n or fusion.top_n], start=1):
+    for rank, (score, chunk) in enumerate(
+        fused[: args.n or config.retrieval.top_n], start=1
+    ):
         positions = " / ".join(
             f"{name} #{rank_map[chunk['id']]}" if chunk["id"] in rank_map else f"{name} -"
             for name, rank_map in zip(names, ranks)
