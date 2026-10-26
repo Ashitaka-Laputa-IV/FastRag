@@ -134,6 +134,11 @@ def main() -> None:
         default=[],
         help="配合 --base-url 使用，可重复；模型名原样作为请求里的 model",
     )
+    parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="配合 --base-url：保留思考（默认关闭，即下发 enable_thinking=false）",
+    )
     args = parser.parse_args()
     if args.runs < 1:
         raise SystemExit("--runs 必须大于 0")
@@ -144,7 +149,7 @@ def main() -> None:
     config = load_config()
     cases = CASES
     if args.base_url:
-        cases = tuple((name, "custom", name, True) for name in args.model)
+        cases = tuple((name, "custom", name, args.thinking) for name in args.model)
         config = dataclasses.replace(
             config,
             endpoints={

@@ -10,6 +10,7 @@
 ## 0. 摘要
 
 - **本地 `qwen3-4b-instruct` 最快：30 ms**（同一台机器、localhost，但见 5.1 的缓存说明）。
+- 本地 `qwen3-4b-instruct` 关闭思考（`enable_thinking=false`）中位数 **29.5 ms**，与不传参数时的 **28.6 ms** 没有差别：它是 instruct 模型，本身不产生思考 token，这个开关对它无效。
 - 云端 200–300 ms 档：`Hunyuan-A13B-Instruct` **230 ms**、`Qwen3-30B-A3B-Instruct` **254 ms**、`GLM-4.5-Air` **269 ms**。
 - 当前默认的 `DeepSeek-V4.1-Flash`：**开思考 1232 ms，关思考 411 ms**；关掉思考能省约 0.8 s。
 - `Step-3.5-Flash`（3173 ms）和 `DeepSeek-V3.2`（1462 ms）明显更慢，不建议用于延迟敏感的角色。
@@ -29,6 +30,11 @@
 ```bash
 env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
   uv run python -m fastrag.llm_ttft --runs 3
+
+# 只测本地模型（默认下发 enable_thinking=false；加 --thinking 则不传参数）
+env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+  uv run python -m fastrag.llm_ttft --runs 3 \
+  --base-url http://127.0.0.1:9938/v1 --model qwen3-4b-instruct
 ```
 
 ## 2. 结果（第 2 次运行）
@@ -69,6 +75,19 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u http
 - `Qwen3.5-35B-A3B` 第 1 次遇到厂家 503/排队，首 token 到 87 s；第 2 次恢复正常。同一模型 160 倍的波动说明**公网服务不能只看一次结果**。
 - DeepSeek 开思考时，短提示词下只多约 0.8 s；但换成 RAG 的真实长提示词，思考会让「首个正文 token」拖到 20 s 以上（见 [`bench-first-token.md`](bench-first-token.md)）。
 
+### 2.2 本地 `qwen3-4b-instruct` 关闭思考
+
+同一台机器、同一端口（`127.0.0.1:9938`），只改是否下发 `enable_thinking=false`，各测 3 次：
+
+| 参数 | 中位数 (ms) | 平均 (ms) | 范围 (ms) |
+| --- | ---: | ---: | ---: |
+| `enable_thinking=false`（关闭思考） | 29.5 | 28.2 | 23.5–31.6 |
+| 不传参数（厂家默认） | 28.6 | 27.6 | 25.3–28.8 |
+
+- 两者没有可辨别的差别。`Qwen3-4B-Instruct-2507` 本身不输出 `reasoning_content`，因此关闭思考不会改变首 token 的行为。
+- llama.cpp 接受 `enable_thinking` 字段（没有返回 400），但只是被忽略。
+- 这两个数字同样受 5.1 的 prompt cache 影响，代表「同一提示词重复请求」下的首 token，不是冷启动。
+
 ## 3. 怎么用这些数
 
 - 需要**最低首字延迟**且能接受本地服务：`qwen3-4b-instruct`（localhost，30 ms，缓存因素见 5.1）。
@@ -97,5 +116,7 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u http
 | `data/bench/llm-ttft-2026-10-26.json` | 主数据（第 2 次，11 个模型） | `efb3b25a560f22f9385382e0cbc777fddd0950c789875b6931dd32e1fd276e21` |
 | `data/bench/llm-ttft-2026-10-26.log` | 第 2 次运行输出 | `5c99ebaf74ea16a330998c35500809894fe4c6f376e944c749efb22cd4907283` |
 | `data/bench/llm-ttft-2026-10-26-run1.json` | 第 1 次（含 35B 的 87 s 离群） | `2305bfe1aa5995c7915073cc7ec21b92526808c986b16fdb9176c62c05595fb9` |
+| `data/bench/llm-ttft-local-qwen3-4b-nothink.json` | 本地 qwen3-4b-instruct 关闭思考 | `dd3913de73bf23e0c9f687b220a45e9f931c8441a86e00078fdf4b234cf43b4a` |
+| `data/bench/llm-ttft-local-qwen3-4b-default.json` | 本地 qwen3-4b-instruct 不传思考参数 | `76f8032d9ffb0fe39cfeb5f7483388568ce47fcfa69b88b2f932ae2301c20473` |
 
 - `data/` 已被 `.gitignore` 忽略，这些文件只留在本机。
