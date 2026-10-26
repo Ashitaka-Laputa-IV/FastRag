@@ -93,6 +93,7 @@ class BM25Config:
 
     stopwords: str
     method: str
+    min_score: float
 
 
 @dataclass(frozen=True)
@@ -226,6 +227,7 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
         bm25=BM25Config(
             stopwords=bm25["stopwords"],
             method=bm25["method"],
+            min_score=bm25["min_score"],
         ),
         retrieval=RetrievalConfig(
             bm25_candidates=retrieval["bm25_candidates"],
