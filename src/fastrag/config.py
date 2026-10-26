@@ -3,7 +3,8 @@
 所有模块共用这一份配置，不再各自维护 TOML 文件与加载逻辑：
 
 - 路径统一解析到仓库根目录
-- 嵌入、LLM、重排共用 [api] 的 base_url 与 api_key_env
+- [endpoints.*] 描述厂家（base_url + key 环境变量），各模型按需引用
+- 嵌入、重排、路由、问题重写、生成可以分别使用不同的厂家与模型
 - 召回条数（candidates）与输出条数（top_n）只保留一份
 """
 
@@ -29,8 +30,8 @@ class Paths:
 
 
 @dataclass(frozen=True)
-class APIConfig:
-    """嵌入、LLM、重排共用的接口地址与 key 环境变量名。"""
+class EndpointConfig:
+    """一家服务商的接入信息。"""
 
     base_url: str
     api_key_env: str
@@ -50,6 +51,7 @@ class ChunkingConfig:
 class EmbeddingConfig:
     """嵌入模型参数。"""
 
+    endpoint: EndpointConfig
     model: str
     batch_size: int
     dimensions: int
@@ -59,17 +61,28 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """对话模型参数。"""
+    """单个 LLM 角色的模型参数。"""
 
+    endpoint: EndpointConfig
     model: str
     provider: str
     temperature: float
 
 
 @dataclass(frozen=True)
+class LLMRoles:
+    """路由、问题重写、生成三个独立的 LLM 角色。"""
+
+    route: LLMConfig
+    requery: LLMConfig
+    answer: LLMConfig
+
+
+@dataclass(frozen=True)
 class RerankerConfig:
     """重排模型参数。"""
 
+    endpoint: EndpointConfig
     model: str
     timeout: float
 
@@ -104,10 +117,10 @@ class Config:
     """config/fastrag.toml 的完整内容。"""
 
     paths: Paths
-    api: APIConfig
+    endpoints: dict[str, EndpointConfig]
     chunking: ChunkingConfig
     embedding: EmbeddingConfig
-    llm: LLMConfig
+    llm: LLMRoles
     reranker: RerankerConfig
     bm25: BM25Config
     retrieval: RetrievalConfig
@@ -131,10 +144,40 @@ def _resolve(path: str) -> pathlib.Path:
     return (ROOT / path).resolve()
 
 
+def _endpoint(
+    endpoints: dict[str, EndpointConfig], name: str, owner: str
+) -> EndpointConfig:
+    """按名字取 endpoint，缺失时指出是哪一个配置引用了它。"""
+    try:
+        return endpoints[name]
+    except KeyError:
+        raise SystemExit(f"{owner}.endpoint = {name!r} 未在 [endpoints] 中定义") from None
+
+
+def _llm(
+    roles: dict, endpoints: dict[str, EndpointConfig], name: str
+) -> LLMConfig:
+    """读取一个 LLM 角色，并解析它引用的 endpoint。"""
+    role = roles[name]
+    return LLMConfig(
+        endpoint=_endpoint(endpoints, role["endpoint"], f"llm.{name}"),
+        model=role["model"],
+        provider=role["provider"],
+        temperature=role["temperature"],
+    )
+
+
 def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
     """读取并校验统一配置。"""
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    paths, api = raw["paths"], raw["api"]
+    paths = raw["paths"]
+    endpoints = {
+        name: EndpointConfig(
+            base_url=item["base_url"],
+            api_key_env=item["api_key_env"],
+        )
+        for name, item in raw["endpoints"].items()
+    }
     chunking, embedding = raw["chunking"], raw["embedding"]
     llm, reranker = raw["llm"], raw["reranker"]
     bm25, retrieval, fusion = raw["bm25"], raw["retrieval"], raw["fusion"]
@@ -154,10 +197,7 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
             embeddings_dir=_resolve(paths["embeddings_dir"]),
             bm25_index_dir=_resolve(paths["bm25_index_dir"]),
         ),
-        api=APIConfig(
-            base_url=api["base_url"],
-            api_key_env=api["api_key_env"],
-        ),
+        endpoints=endpoints,
         chunking=ChunkingConfig(
             tokenizer=chunking["tokenizer"],
             chunk_size=chunking["chunk_size"],
@@ -165,18 +205,20 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
             include_delim=chunking["include_delim"],
         ),
         embedding=EmbeddingConfig(
+            endpoint=_endpoint(endpoints, embedding["endpoint"], "embedding"),
             model=embedding["model"],
             batch_size=embedding["batch_size"],
             dimensions=embedding["dimensions"],
             timeout=embedding["timeout"],
             max_retries=embedding["max_retries"],
         ),
-        llm=LLMConfig(
-            model=llm["model"],
-            provider=llm["provider"],
-            temperature=llm["temperature"],
+        llm=LLMRoles(
+            route=_llm(llm, endpoints, "route"),
+            requery=_llm(llm, endpoints, "requery"),
+            answer=_llm(llm, endpoints, "answer"),
         ),
         reranker=RerankerConfig(
+            endpoint=_endpoint(endpoints, reranker["endpoint"], "reranker"),
             model=reranker["model"],
             timeout=reranker["timeout"],
         ),

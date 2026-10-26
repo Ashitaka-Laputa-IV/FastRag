@@ -5,7 +5,8 @@
 
 - 流程图见 README.md
 - 提示词单独放在 prompts/，便于迭代
-- 参数统一见 config/fastrag.toml
+- 参数统一见 config/fastrag.toml；路由、问题重写、生成分别在
+  [llm.route]、[llm.requery]、[llm.answer] 配置，可使用不同模型与厂家
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -73,9 +74,11 @@ class Pipeline:
     def __init__(self, config: Config):
         load_env()
         self.config = config
-        self.llm: BaseChatModel = build_llm(config)
-        self.decide_chain = self.llm.with_structured_output(SearchDecision)
-        self.requery_chain = self.llm.with_structured_output(SearchQuery)
+        self.route_llm: BaseChatModel = build_llm(config.llm.route)
+        self.requery_llm: BaseChatModel = build_llm(config.llm.requery)
+        self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
+        self.decide_chain = self.route_llm.with_structured_output(SearchDecision)
+        self.requery_chain = self.requery_llm.with_structured_output(SearchQuery)
         self.prompts = {
             name: load_prompt(name) for name in ("decide_search", "requery", "answer")
         }
@@ -148,7 +151,7 @@ class Pipeline:
         prompt = self.prompts["answer"].format(
             context=context, question=state["question"]
         )
-        return {"answer": self.llm.invoke(prompt).text.strip()}
+        return {"answer": self.answer_llm.invoke(prompt).text.strip()}
 
     @staticmethod
     def _merge(*rankings: list[dict]) -> list[dict]:

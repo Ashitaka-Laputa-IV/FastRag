@@ -3,7 +3,7 @@
 - 通过 `init_reranker("custom:<model>", base_url=..., api_key=...)` 创建重排器，
   调用任意 Cohere 风格的 `/rerank` 接口（交叉编码器，默认配置指向 SiliconFlow）
 - 排序、top_n 与 relevance_score 写回 metadata 均由 `compress_documents` 提供
-- 参数来自 config/fastrag.toml 的 [reranker]、[api]、[retrieval]
+- 参数来自 config/fastrag.toml 的 [reranker]、[endpoints]、[retrieval]
 - 演示流程：BM25 召回 candidates 条 -> 重排 -> 输出 top_n 条
   （`rerank_chunks` 只依赖 chunk 列表，可接任意检索器的候选）
 
@@ -29,14 +29,15 @@ from fastrag.config import Config, load_config, load_env
 
 def build_reranker(config: Config) -> BaseDocumentCompressor:
     """按配置创建重排器，缺 key 时给出明确提示。"""
-    api_key = os.environ.get(config.api.api_key_env)
+    api_key = os.environ.get(config.reranker.endpoint.api_key_env)
     if not api_key:
         raise SystemExit(
-            f"缺少 {config.api.api_key_env}，请先 cp .env.example .env 并填写"
+            f"缺少 {config.reranker.endpoint.api_key_env}，"
+            "请先 cp .env.example .env 并填写"
         )
     return init_reranker(
         f"custom:{config.reranker.model}",
-        base_url=config.api.base_url,
+        base_url=config.reranker.endpoint.base_url,
         api_key=api_key,
         timeout=config.reranker.timeout,
         top_n=config.retrieval.top_n,

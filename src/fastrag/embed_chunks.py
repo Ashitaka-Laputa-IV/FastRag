@@ -1,6 +1,6 @@
 """为切块后的 chunk 生成向量，并用固定问题演示一次向量检索。
 
-模型与接口由 config/fastrag.toml 的 [embedding]、[api]、[paths] 指定，
+模型与接口由 config/fastrag.toml 的 [embedding]、[endpoints]、[paths] 指定，
 代码与具体模型无关。
 
 - API key 只从 .env / 环境变量读取
@@ -46,14 +46,15 @@ def load_chunks(config: Config) -> list[dict]:
 
 def build_embeddings(config: Config) -> OpenAIEmbeddings:
     """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。"""
-    api_key = os.environ.get(config.api.api_key_env)
+    api_key = os.environ.get(config.embedding.endpoint.api_key_env)
     if not api_key:
         raise SystemExit(
-            f"缺少 {config.api.api_key_env}，请先 cp .env.example .env 并填写"
+            f"缺少 {config.embedding.endpoint.api_key_env}，"
+            "请先 cp .env.example .env 并填写"
         )
     return OpenAIEmbeddings(
         model=config.embedding.model,
-        base_url=config.api.base_url,
+        base_url=config.embedding.endpoint.base_url,
         api_key=api_key,
         chunk_size=config.embedding.batch_size,
         max_retries=config.embedding.max_retries,
