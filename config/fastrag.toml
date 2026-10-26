@@ -40,12 +40,14 @@ endpoint = "siliconflow"
 model = "deepseek-ai/DeepSeek-V4.1-Flash"
 provider = "openai"  # init_chat_model 的 model_provider
 temperature = 0.7
+thinking = true      # 推理模型是否保留思考（false 时下发 enable_thinking=false）
 
 [llm.answer]
 endpoint = "siliconflow"
 model = "deepseek-ai/DeepSeek-V4.1-Flash"
 provider = "openai"
 temperature = 0.7
+thinking = true      # 基准默认覆盖为 false 以测首 token；--thinking 可保留思考
 
 [reranker]
 endpoint = "siliconflow"  # 任意 Cohere 风格的 /rerank 服务

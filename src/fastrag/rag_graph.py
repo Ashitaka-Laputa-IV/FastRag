@@ -9,6 +9,7 @@
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 每个节点用 timed 装饰器把耗时写进 state["timings"]，供 bench.py 统计
+- 基准默认以「首 token 延迟」计量生成：读到第一个 chunk 就断开，不等待整段回答
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -116,13 +117,27 @@ def load_prompt(name: str) -> str:
 
 
 class Pipeline:
-    """把图需要的配置与检索资源准备好，节点函数通过闭包使用。"""
+    """把图需要的配置与检索资源准备好，节点函数通过闭包使用。
 
-    def __init__(self, config: Config):
+    first_token_only=True 时，「生成」阶段读到首个 token 就断开流，
+    节点耗时即首 token 延迟（TTFT），bench 默认使用该口径；
+    answer_thinking=False 会关掉回答模型的思考过程，让首 token 就是正文。
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        first_token_only: bool = False,
+        answer_thinking: bool = True,
+    ):
         load_env()
         self.config = config
+        self.first_token_only = first_token_only
+        self.answer_thinking = answer_thinking
         self.route_llm: BaseChatModel = build_llm(config.llm.route)
-        self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
+        self.answer_llm: BaseChatModel = build_llm(
+            config.llm.answer, thinking=answer_thinking
+        )
         self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
         self.prompts = {
             name: load_prompt(name) for name in ("search_plan", "answer")
@@ -203,7 +218,11 @@ class Pipeline:
 
     @timed("generate")
     def answer(self, state: RAGState) -> dict:
-        """把检索片段拼进 prompt，让 LLM 依据资料作答。"""
+        """把检索片段拼进 prompt，让 LLM 依据资料作答。
+
+        first_token_only=True 时只读到第一个有内容的 chunk 就断开连接，
+        节点耗时因此等于首 token 延迟（TTFT），不包含剩余生成时间。
+        """
         chunks = state.get("fused", [])[: self.config.retrieval.top_n]
         context = (
             "\n\n".join(
@@ -215,7 +234,26 @@ class Pipeline:
         prompt = self.prompts["answer"].format(
             context=context, question=state["question"]
         )
+        if self.first_token_only:
+            return {"answer": self._first_token(prompt)}
         return {"answer": self.answer_llm.invoke(prompt).text.strip()}
+
+    def _first_token(self, prompt: str) -> str:
+        """读取首个有内容的 chunk 后立即断开流，返回这段文本。
+
+        断流可以取消后续请求，避免继续为完整回答付出时间和 token；
+        首个 chunk 可能只有角色信息、文本为空，需要跳过。
+        """
+        stream = self.answer_llm.stream(prompt)
+        try:
+            for chunk in stream:
+                if chunk.text:
+                    return chunk.text
+            return ""
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
 
     @staticmethod
     def _merge(*rankings: list[dict]) -> list[dict]:
@@ -269,10 +307,16 @@ class Pipeline:
         return graph.compile()
 
 
-@lru_cache(maxsize=1)
-def get_pipeline() -> Pipeline:
-    """进程内复用 Pipeline（向量、重排器等只初始化一次）。"""
-    return Pipeline(load_config())
+@lru_cache(maxsize=4)
+def get_pipeline(
+    first_token_only: bool = False, answer_thinking: bool = True
+) -> Pipeline:
+    """进程内复用 Pipeline（向量、重排器等只初始化一次），按生成口径区分缓存。"""
+    return Pipeline(
+        load_config(),
+        first_token_only=first_token_only,
+        answer_thinking=answer_thinking,
+    )
 
 
 def main() -> None:

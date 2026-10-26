@@ -61,12 +61,17 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """单个 LLM 角色的模型参数。"""
+    """单个 LLM 角色的模型参数。
+
+    thinking 只对推理模型有意义：True 用厂家默认（通常开），
+    False 时通过 enable_thinking=false 关掉思考，首 token 直接是回答正文。
+    """
 
     endpoint: EndpointConfig
     model: str
     provider: str
     temperature: float
+    thinking: bool = True
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,7 @@ def _llm(
         model=role["model"],
         provider=role["provider"],
         temperature=role["temperature"],
+        thinking=role.get("thinking", True),
     )
 
 

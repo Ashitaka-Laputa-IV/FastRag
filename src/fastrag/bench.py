@@ -6,17 +6,24 @@
 
 - 耗时由 rag_graph 的节点装饰器记录在 state["timings"]（毫秒）
 - 召回是 BM25 与向量两路并行，阶段耗时取较慢的一路
+- 生成默认按「首 token 延迟」计量：拿到第一个 token 就断开，不等待整段回答；
+  `--full-generation` 可退回旧口径（跑完整回答）
+- 为让首 token 就是回答正文，基准默认关掉回答模型的思考（`enable_thinking=false`），
+  `--thinking` 可保留思考过程
 - 统计前先用第一个问题做一次预热，避免首次建连、懒加载影响结果
 
 用法:
     uv run python -m fastrag.bench
     uv run python -m fastrag.bench --runs 5
+    uv run python -m fastrag.bench --thinking
+    uv run python -m fastrag.bench --full-generation
     uv run python -m fastrag.bench --json data/bench/results.json
 
 输出示例:
     $ uv run python -m fastrag.bench
+    生成口径: 首 token（拿到首 token 即断开），回答模型思考: 关闭
     预热完成（不计入统计）
-    [1/9] LangGraph 中如何实现 human-in-the-loop？ 4213 ms
+    [1/9] LangGraph 中如何实现 human-in-the-loop？ 8123 ms
     ...
     ## 全部 9 次
     | 阶段 | 平均 (ms) | 中位数 (ms) | 最小 (ms) | 最大 (ms) | 标准差 (ms) |
@@ -133,6 +140,7 @@ def run(
     pipeline: Pipeline, questions: tuple[str, ...], runs: int, init_ms: float
 ) -> dict:
     """预热后逐个问题重复运行，返回可落盘的明细与统计。"""
+    first_token_only = pipeline.first_token_only
     pipeline.graph.invoke({"question": questions[0]})
     print("预热完成（不计入统计）")
 
@@ -152,6 +160,8 @@ def run(
                 "vector_query": state.get("vector_query", ""),
                 "wall_ms": round(wall_ms, 1),
                 **stages,
+                "first_token_only": first_token_only,
+                "answer_thinking": pipeline.answer_thinking,
                 "nodes": state.get("timings", {}),
                 "answer_chars": len(state.get("answer", "")),
             }
@@ -166,6 +176,8 @@ def run(
         "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         "init_ms": round(init_ms, 1),
         "runs_per_question": runs,
+        "generation_mode": "first_token" if first_token_only else "full",
+        "answer_thinking": pipeline.answer_thinking,
         "records": records,
         "summary": summary,
     }
@@ -175,17 +187,37 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="RAG 各阶段耗时基准测试")
     parser.add_argument("--runs", type=int, default=RUNS, help="每个问题运行次数")
     parser.add_argument(
+        "--full-generation",
+        action="store_true",
+        help="生成阶段跑完整回答（旧口径）；默认拿到首 token 就断开，只计 TTFT",
+    )
+    parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="保留回答模型的思考过程（默认关闭，首 token 即回答正文）",
+    )
+    parser.add_argument(
         "--json", type=pathlib.Path, default=DEFAULT_JSON, help="明细输出路径"
     )
     args = parser.parse_args()
     if args.runs < 1:
         raise SystemExit("--runs 必须大于 0")
 
+    first_token_only = not args.full_generation
+    answer_thinking = args.thinking
     config = load_config()
     started = time.perf_counter()
-    pipeline = get_pipeline()
+    pipeline = get_pipeline(
+        first_token_only=first_token_only, answer_thinking=answer_thinking
+    )
     init_ms = (time.perf_counter() - started) * 1000
     print(f"初始化完成 {init_ms:.0f} ms（模型、向量、索引、重排器，不计入统计）")
+    print(
+        "生成口径: "
+        + ("首 token（拿到首 token 即断开）" if first_token_only else "完整回答")
+        + "，回答模型思考: "
+        + ("开启" if answer_thinking else "关闭")
+    )
 
     payload = run(pipeline, QUESTIONS, args.runs, init_ms)
     payload["config"] = {
@@ -200,6 +232,7 @@ def main() -> None:
     labels = {
         **STAGE_LABELS,
         "fusion": "重排" if config.fusion.method == "rerank" else "融合",
+        "generate": "生成" if not first_token_only else "首 token",
     }
 
     args.json.parent.mkdir(parents=True, exist_ok=True)

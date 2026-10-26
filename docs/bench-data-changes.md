@@ -6,6 +6,7 @@
 - 合并后：`upstream/dev` 的 `740322f`（含 PR #9 统一配置、#10 BM25 零分过滤、#11 合并路由与改写节点），合并提交 `6c61762`
 - 旧报告：[`bench-rag-latency.md`](bench-rag-latency.md)（保留原样，未改动其中的历史数据）
 - 旧明细：`data/bench/results-2026-10-26-pre-dev-merge.json`（`data/` 被忽略，不随仓库提交）
+- 后续口径调整：[`bench-first-token.md`](bench-first-token.md)（生成改为首 token、关闭思考；本文的 22–24 s 是完整回答口径）
 
 ## 0. 结论摘要
 
@@ -44,13 +45,14 @@
 
 ## 2. 数据保留
 
-合并前的旧明细已复制为独立文件，复测没有覆盖它；两次合并后运行也都各自留档，`results.json` 只表示「最近一次」。
+合并前的旧明细已复制为独立文件，复测没有覆盖它；两次合并后运行也都各自留档，`results.json` 只表示「最近一次」（当前是首 token 口径的副本）。
 
 | 文件 | 内容 | sha256 |
 | --- | --- | --- |
 | `data/bench/results-2026-10-26-pre-dev-merge.json` | 合并前 9 次（`338d247`），即旧报告使用的数据 | `f6fd9bab69424d24f926cb3ba5934520ef674ffaf57b2d7cfa9bd1096c74a13a` |
 | `data/bench/results-2026-10-26-post-dev-merge-run1.json` | 合并后第 1 次 9 次（17:06） | `29c8b32643ef1ad686df9e66c2979059f53272e6e6145898c09bd77bcbde1b66` |
-| `data/bench/results.json` | 合并后第 2 次 9 次（17:28，本文主数据） | `c9c265e18c88ff2f7c17f1f3310b1846132610270ab1eb3917f31a84fb07c2b9` |
+| `data/bench/results-2026-10-26-post-dev-merge-run2.json` | 合并后第 2 次 9 次（17:28，本文主数据） | `c9c265e18c88ff2f7c17f1f3310b1846132610270ab1eb3917f31a84fb07c2b9` |
+| `data/bench/results-2026-10-26-first-token.json` | 首 token 口径（见 [`bench-first-token.md`](bench-first-token.md)） | `8648ab1e7c8666375dd331b14f187456c0997f4aa51c26b4449f02e730a15949` |
 | `data/bench/bench-run-20261026-post-dev-merge-noproxy.log` | 第 1 次运行的完整输出 | `ce6526fc13a725b2c269b8fe976f0dc1a82acdecfcefab44356c1033b1401c6c` |
 | `data/bench/bench-run-20261026-post-dev-merge-rerun.log` | 第 2 次运行的完整输出 | `b0175b7484099e734084f195c363e2b04f789121640eb9f3f5d2caaee1f5e1f8` |
 
