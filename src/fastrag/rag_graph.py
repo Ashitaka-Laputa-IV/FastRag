@@ -1,11 +1,14 @@
 """用 langgraph 编排 RAG 流程。
 
-节点链路：decide_search(LLM) -> requery(LLM) -> bm25 / vector 并行召回
+节点链路：plan_search(LLM：判断是否检索 + 生成两路查询) -> bm25 / vector 并行召回
           -> fuse(RRF 或 rerank) -> answer(LLM)
 
 - 流程图见 README.md
 - 提示词单独放在 prompts/，便于迭代
-- 参数见 config/rag.toml；LLM 与重排参数分别见 config/llm.toml、config/reranker.toml
+- 参数统一见 config/fastrag.toml；判断检索与生成回答分别在
+  [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
+- 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
+- 每个节点用 timed 装饰器把耗时写进 state["timings"]，供 bench.py 统计
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -13,52 +16,35 @@
 输出示例:
     $ uv run python -m fastrag.rag_graph
     问题（回车退出）: LangGraph 中如何实现 human-in-the-loop？
-    检索查询: LangGraph human-in-the-loop 实现方法
+    BM25 查询: human-in-the-loop interrupt approval
+    向量查询: How to implement human-in-the-loop human approval in LangGraph?
     来源:
       - data/langchain-docs/oss/python/langgraph/interrupts.md#0-1234
     回答: 依据资料，...（逐 token 输出）
+    耗时(ms): 检索规划 4213.5  召回 164.1  融合 0.1  生成 20932.7
 """
 
-import pathlib
 import time
-import tomllib
+import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
 from functools import lru_cache, wraps
 from typing import Annotated, TypedDict
-import warnings
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from fastrag.embed_chunks import (
-    ensure_vectors,
-    load_chunks as load_embedding_chunks,
-    load_config as load_embedding_config,
-    load_env,
-    search as search_vectors,
-)
-from fastrag.keyword_search import (
-    load_config as load_keyword_config,
-    search as search_keywords,
-)
-from fastrag.llm import build_llm, load_config as load_llm_config
-from fastrag.reranker import (
-    build_reranker,
-    load_config as load_reranker_config,
-    rerank_chunks,
-)
+from fastrag.config import ROOT, Config, load_config, load_env
+from fastrag.embed_chunks import ensure_vectors, load_chunks, search as search_vectors
+from fastrag.keyword_search import search as search_keywords
+from fastrag.llm import build_llm
+from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = ROOT / "config" / "rag.toml"
 PROMPTS_DIR = ROOT / "prompts"
-FUSION_METHODS = ("rrf", "rerank")
 STAGE_LABELS = {
-    "route": "路由",
-    "requery": "问题重写",
+    "plan": "检索规划",
     "retrieve": "召回",
     "retrieve_bm25": "BM25 召回",
     "retrieve_vector": "向量召回",
@@ -74,11 +60,12 @@ def merge_timings(left: dict[str, float], right: dict[str, float]) -> dict[str, 
 
 
 class RAGState(TypedDict, total=False):
-    """图状态：问题、是否需要检索、改写后的查询、两路召回、融合结果、回答与耗时。"""
+    """图状态：问题、是否需要检索、两路查询、两路召回、融合结果、回答与耗时。"""
 
     question: str
     need_search: bool
-    search_query: str
+    bm25_query: str
+    vector_query: str
     bm25: list[dict]
     vector: list[dict]
     fused: list[dict]
@@ -109,41 +96,17 @@ def timed(stage: str | Callable[["Pipeline"], str]):
     return decorate
 
 
-class SearchDecision(BaseModel):
-    """decide_search 节点的结构化输出。"""
+class SearchPlan(BaseModel):
+    """plan_search 节点的结构化输出：是否检索 + 两路各自的查询。"""
 
     need_search: bool = Field(description="回答该问题是否需要检索本地文档库")
-
-
-class SearchQuery(BaseModel):
-    """requery 节点的结构化输出。"""
-
-    query: str = Field(description="改写后、适合文档检索的查询")
-
-
-@dataclass(frozen=True)
-class RAGConfig:
-    """RAG 配置，对应 config/rag.toml。"""
-
-    candidates: int
-    method: str
-    k: int
-    weights: tuple[float, ...]
-    context_n: int
-
-
-def load_config(path: pathlib.Path = CONFIG_PATH) -> RAGConfig:
-    """读取 TOML 配置，并校验融合方式。"""
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    retrieval, fusion, answer = raw["retrieval"], raw["fusion"], raw["answer"]
-    if fusion["method"] not in FUSION_METHODS:
-        raise SystemExit(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
-    return RAGConfig(
-        candidates=retrieval["candidates"],
-        method=fusion["method"],
-        k=fusion["k"],
-        weights=tuple(fusion["weights"]),
-        context_n=answer["context_n"],
+    bm25_query: str = Field(
+        default="",
+        description="给 BM25 的英文关键词查询，空格分隔的术语；不需要检索时为空字符串",
+    )
+    vector_query: str = Field(
+        default="",
+        description="给向量检索的英文自然语言问句；不需要检索时为空字符串",
     )
 
 
@@ -155,79 +118,93 @@ def load_prompt(name: str) -> str:
 class Pipeline:
     """把图需要的配置与检索资源准备好，节点函数通过闭包使用。"""
 
-    def __init__(self, config: RAGConfig):
+    def __init__(self, config: Config):
         load_env()
         self.config = config
-        self.llm: BaseChatModel = build_llm(load_llm_config())
-        self.decide_chain = self.llm.with_structured_output(SearchDecision)
-        self.requery_chain = self.llm.with_structured_output(SearchQuery)
+        self.route_llm: BaseChatModel = build_llm(config.llm.route)
+        self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
+        self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
         self.prompts = {
-            name: load_prompt(name) for name in ("decide_search", "requery", "answer")
+            name: load_prompt(name) for name in ("search_plan", "answer")
         }
-        self.keyword_config = load_keyword_config()
-        self.embedding_config = load_embedding_config()
-        self.chunks = load_embedding_chunks(self.embedding_config)
-        self.vectors = ensure_vectors(self.embedding_config, self.chunks)
+        self.chunks = load_chunks(config)
+        self.vectors = ensure_vectors(config, self.chunks)
         self.reranker = (
-            build_reranker(load_reranker_config())
-            if config.method == "rerank"
-            else None
+            build_reranker(config) if config.fusion.method == "rerank" else None
         )
         self.graph = self._build_graph()
 
-    @timed("route")
-    def decide_search(self, state: RAGState) -> dict:
-        """用 LLM 判断是否需要检索本地文档。"""
-        decision = self.decide_chain.invoke(
-            self.prompts["decide_search"].format(question=state["question"])
-        )
-        return {"need_search": decision.need_search}
+    @timed("plan")
+    def plan_search(self, state: RAGState) -> dict:
+        """一次调用同时判断是否检索，并给出两路各自的查询。
 
-    @timed("requery")
-    def requery(self, state: RAGState) -> dict:
-        """用 LLM 把问题改写成更适合检索的查询。"""
-        result = self.requery_chain.invoke(
-            self.prompts["requery"].format(question=state["question"])
+        不需要检索时不生成查询，直接返回空字符串；需要检索时若模型漏填某一路，
+        就退回原始问题，保证召回节点总能拿到可用的查询。
+        """
+        plan = self.plan_chain.invoke(
+            self.prompts["search_plan"].format(question=state["question"])
         )
-        return {"search_query": result.query}
+        if not plan.need_search:
+            return {"need_search": False, "bm25_query": "", "vector_query": ""}
+
+        question = state["question"]
+        return {
+            "need_search": True,
+            "bm25_query": plan.bm25_query.strip() or question,
+            "vector_query": plan.vector_query.strip() or question,
+        }
 
     @timed("retrieve_bm25")
     def retrieve_bm25(self, state: RAGState) -> dict:
-        """BM25 关键词召回。"""
+        """BM25 关键词召回，使用术语叠加的 bm25_query。"""
         hits = search_keywords(
-            self.keyword_config, state["search_query"], self.config.candidates
+            self.config,
+            state["bm25_query"],
+            self.config.retrieval.bm25_candidates,
         )
         return {"bm25": [chunk for _, chunk in hits]}
 
     @timed("retrieve_vector")
     def retrieve_vector(self, state: RAGState) -> dict:
-        """向量语义召回。"""
+        """向量语义召回，使用自然语言问句 vector_query。"""
         hits = search_vectors(
-            self.embedding_config,
+            self.config,
             self.vectors,
             self.chunks,
-            state["search_query"],
-            self.config.candidates,
+            state["vector_query"],
+            self.config.retrieval.vector_candidates,
         )
         return {"vector": [chunk for _, chunk in hits]}
 
-    @timed(lambda pipeline: "rerank" if pipeline.config.method == "rerank" else "fusion")
+    @timed(lambda pipeline: "rerank" if pipeline.config.fusion.method == "rerank" else "fusion")
     def fuse(self, state: RAGState) -> dict:
-        """按配置的融合方式（rrf / rerank）排序两路召回结果。"""
+        """按配置的融合方式（rrf / rerank）排序两路召回结果。
+
+        rerank 分支用原始问题做 cross-encoder 输入（保留完整语义），
+        与 RRF 只看名次的口径不同，两种方式都按 retrieval.top_n 截断。
+        """
         bm25 = state.get("bm25", [])
         vector = state.get("vector", [])
-        if self.config.method == "rerank":
+        if not bm25 and not vector:
+            return {"fused": []}
+
+        top_n = self.config.retrieval.top_n
+        if self.config.fusion.method == "rerank":
             merged = self._merge(bm25, vector)
             documents = rerank_chunks(self.reranker, state["question"], merged)
-            return {"fused": [self._to_chunk(document) for document in documents]}
+            return {
+                "fused": [self._to_chunk(document) for document in documents[:top_n]]
+            }
 
-        fused = rrf_fuse([bm25, vector], self.config.k, self.config.weights)
-        return {"fused": [chunk for _, chunk in fused][: self.config.context_n]}
+        fused = rrf_fuse(
+            [bm25, vector], self.config.fusion.rrf_k, self.config.fusion.weights
+        )
+        return {"fused": [chunk for _, chunk in fused][:top_n]}
 
     @timed("generate")
     def answer(self, state: RAGState) -> dict:
         """把检索片段拼进 prompt，让 LLM 依据资料作答。"""
-        chunks = state.get("fused", [])[: self.config.context_n]
+        chunks = state.get("fused", [])[: self.config.retrieval.top_n]
         context = (
             "\n\n".join(
                 f"[{index}] {chunk['source']}\n{chunk['text']}"
@@ -238,7 +215,7 @@ class Pipeline:
         prompt = self.prompts["answer"].format(
             context=context, question=state["question"]
         )
-        return {"answer": self.llm.invoke(prompt).text.strip()}
+        return {"answer": self.answer_llm.invoke(prompt).text.strip()}
 
     @staticmethod
     def _merge(*rankings: list[dict]) -> list[dict]:
@@ -265,27 +242,26 @@ class Pipeline:
         }
 
     @staticmethod
-    def route_after_decide(state: RAGState) -> str:
-        """需要检索就改写查询，否则直接回答。"""
-        return "requery" if state.get("need_search", True) else "answer"
+    def route_after_plan(state: RAGState) -> list[str]:
+        """需要检索就同时走 BM25 与向量两路，否则直接回答。"""
+        if not state.get("need_search", True):
+            return ["answer"]
+        return ["retrieve_bm25", "retrieve_vector"]
 
     def _build_graph(self):
         graph = StateGraph(RAGState)
-        graph.add_node("decide_search", self.decide_search)
-        graph.add_node("requery", self.requery)
+        graph.add_node("plan_search", self.plan_search)
         graph.add_node("retrieve_bm25", self.retrieve_bm25)
         graph.add_node("retrieve_vector", self.retrieve_vector)
         graph.add_node("fuse", self.fuse)
         graph.add_node("answer", self.answer)
 
-        graph.add_edge(START, "decide_search")
+        graph.add_edge(START, "plan_search")
         graph.add_conditional_edges(
-            "decide_search",
-            self.route_after_decide,
-            {"requery": "requery", "answer": "answer"},
+            "plan_search",
+            self.route_after_plan,
+            ["retrieve_bm25", "retrieve_vector", "answer"],
         )
-        graph.add_edge("requery", "retrieve_bm25")
-        graph.add_edge("requery", "retrieve_vector")
         graph.add_edge("retrieve_bm25", "fuse")
         graph.add_edge("retrieve_vector", "fuse")
         graph.add_edge("fuse", "answer")
@@ -328,8 +304,11 @@ def main() -> None:
         print()
 
         state = run.output or {}
-        if state.get("search_query"):
-            print(f"检索查询: {state['search_query']}")
+        if state.get("need_search"):
+            print(f"BM25 查询: {state.get('bm25_query', '')}")
+            print(f"向量查询: {state.get('vector_query', '')}")
+        else:
+            print("未检索本地文档")
         for chunk in state.get("fused", []):
             print(f"来源: {chunk['source']}#{chunk['start']}-{chunk['end']}")
         timings = state.get("timings", {})

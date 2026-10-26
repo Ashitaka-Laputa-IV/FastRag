@@ -1,7 +1,8 @@
 """对 RAG 各阶段做耗时基准测试。
 
-固定 3 个问题，每个问题跑 runs 次（默认 3），统计路由、问题重写、召回、
-融合/重排、生成的耗时；跑完输出 Markdown 表格，并把明细写入 JSON 方便复查。
+固定 3 个问题，每个问题跑 runs 次（默认 3），统计检索规划（判断是否检索 +
+生成两路查询）、召回、融合/重排、生成的耗时；跑完输出 Markdown 表格，并把
+明细写入 JSON 方便复查。
 
 - 耗时由 rag_graph 的节点装饰器记录在 state["timings"]（毫秒）
 - 召回是 BM25 与向量两路并行，阶段耗时取较慢的一路
@@ -29,7 +30,8 @@ import pathlib
 import statistics
 import time
 
-from fastrag.rag_graph import STAGE_LABELS, Pipeline, get_pipeline, load_config
+from fastrag.config import load_config
+from fastrag.rag_graph import STAGE_LABELS, Pipeline, get_pipeline
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 DEFAULT_JSON = ROOT / "data" / "bench" / "results.json"
@@ -39,14 +41,13 @@ QUESTIONS = (
     "LangChain 的 Agent 如何调用工具？",
 )
 RUNS = 3
-STAGES = ("route", "requery", "retrieve", "fusion", "generate")
+STAGES = ("plan", "retrieve", "fusion", "generate")
 
 
 def measure(timings: dict[str, float]) -> dict[str, float]:
-    """把节点耗时整理成 5 个阶段；召回取 BM25 与向量中较慢的一路。"""
+    """把节点耗时整理成 4 个阶段；召回取 BM25 与向量中较慢的一路。"""
     return {
-        "route": timings.get("route", 0.0),
-        "requery": timings.get("requery", 0.0),
+        "plan": timings.get("plan", 0.0),
         "retrieve": max(
             timings.get("retrieve_bm25", 0.0), timings.get("retrieve_vector", 0.0)
         ),
@@ -147,7 +148,8 @@ def run(
                 "question": question,
                 "run": index,
                 "need_search": bool(state.get("need_search")),
-                "search_query": state.get("search_query", ""),
+                "bm25_query": state.get("bm25_query", ""),
+                "vector_query": state.get("vector_query", ""),
                 "wall_ms": round(wall_ms, 1),
                 **stages,
                 "nodes": state.get("timings", {}),
@@ -187,13 +189,17 @@ def main() -> None:
 
     payload = run(pipeline, QUESTIONS, args.runs, init_ms)
     payload["config"] = {
-        "method": config.method,
-        "candidates": config.candidates,
-        "context_n": config.context_n,
+        "fusion_method": config.fusion.method,
+        "rrf_k": config.fusion.rrf_k,
+        "fusion_weights": list(config.fusion.weights),
+        "bm25_candidates": config.retrieval.bm25_candidates,
+        "vector_candidates": config.retrieval.vector_candidates,
+        "top_n": config.retrieval.top_n,
+        "bm25_min_score": config.bm25.min_score,
     }
     labels = {
         **STAGE_LABELS,
-        "fusion": "重排" if config.method == "rerank" else "融合",
+        "fusion": "重排" if config.fusion.method == "rerank" else "融合",
     }
 
     args.json.parent.mkdir(parents=True, exist_ok=True)

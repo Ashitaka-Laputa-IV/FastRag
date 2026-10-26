@@ -1,0 +1,68 @@
+# FastRAG 统一配置：路径、切块、嵌入、LLM、重排、检索与融合参数都在这里。
+# API key 只从 .env / 环境变量读取，不写进本文件。
+# 所有相对路径都相对仓库根目录。
+
+[paths]
+docs_dir = "data/langchain-docs"    # 输入文档目录
+chunks_file = "data/chunks.jsonl"   # chunk 语料，切块、嵌入、BM25 共用
+embeddings_dir = "data/embeddings"  # vectors.npy + manifest.json
+bm25_index_dir = "data/bm25-index"  # BM25 索引与 corpus
+
+[endpoints.siliconflow]
+# 一个 endpoint 对应一家服务商（base_url + key 环境变量）。
+# 嵌入、重排、各 LLM 角色通过 endpoint 字段引用，可以混用不同厂家。
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+
+# 其他厂家示例：取消注释并把对应 key 写进 .env
+# [endpoints.openai]
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"
+
+[chunking]
+# 长度一律按 token 计量（tiktoken 编码），便于对齐嵌入模型的上下文上限。
+tokenizer = "cl100k_base"  # tiktoken 编码名，与 OpenAI 嵌入模型一致
+chunk_size = 512           # 单块 token 上限（约 500）
+chunk_overlap = 128        # 相邻块重叠 token 数（约 25%）
+include_delim = "prev"     # 句末分隔符归入前一块，保证 text == 原文[start:end]
+
+[embedding]
+endpoint = "siliconflow"  # 引用 [endpoints.*]，可换成其他厂家
+model = "Qwen/Qwen3-Embedding-4B"
+batch_size = 32           # 单次请求的文本条数
+dimensions = 2560         # Qwen3-Embedding-4B 输出维度
+timeout = 120             # 单次请求超时（秒）
+max_retries = 3
+
+# 判断检索并生成两路查询 / 生成回答可以分别配置模型、厂家与温度。
+[llm.route]
+endpoint = "siliconflow"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+provider = "openai"  # init_chat_model 的 model_provider
+temperature = 0.7
+
+[llm.answer]
+endpoint = "siliconflow"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+provider = "openai"
+temperature = 0.7
+
+[reranker]
+endpoint = "siliconflow"  # 任意 Cohere 风格的 /rerank 服务
+model = "Qwen/Qwen3-Reranker-4B"
+timeout = 60  # 单次请求超时（秒）
+
+[bm25]
+stopwords = "english"  # bm25s 内置停用词（"english"/"en" 或自定义列表）
+method = "lucene"      # 打分方法：lucene / robertson / atire / bm25l / bm25+
+min_score = 0.0        # 只保留分数大于该值的命中，默认去掉零分文档
+
+[retrieval]
+bm25_candidates = 20   # BM25 召回条数
+vector_candidates = 20 # 向量召回条数
+top_n = 5              # 最终送入 LLM 的片段数，也是各命令行工具的默认返回条数
+
+[fusion]
+method = "rrf"       # 融合排序方式：rrf | rerank
+rrf_k = 60           # method=rrf 时的平滑常数：score = Σ w / (rrf_k + rank)
+weights = [1.1, 1.0] # 两路权重（BM25、向量），BM25 略高
