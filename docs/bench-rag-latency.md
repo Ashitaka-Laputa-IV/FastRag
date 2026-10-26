@@ -1,5 +1,8 @@
 # RAG 各阶段耗时基准报告（RRF 配置）
 
+> 历史报告：以下数据采集于合并 `upstream/dev` 之前（`338d247`），保留原样便于对照。
+> 合并后的配置差异与复测数据见 [`bench-data-changes.md`](bench-data-changes.md)。
+
 - 日期：2026-10-26
 - 分支：`bench`（基于 `upstream/dev`，基线 `12edf0d`）
 - 当前配置：`config/rag.toml` 的 `fusion.method = "rrf"`（由上一版 `rerank` 切换）
