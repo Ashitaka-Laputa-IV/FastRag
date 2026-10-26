@@ -20,10 +20,12 @@
 """
 
 import pathlib
+import time
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import TypedDict
+from functools import lru_cache, wraps
+from typing import Annotated, TypedDict
 import warnings
 
 from langchain_core.documents import Document
@@ -54,10 +56,25 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "rag.toml"
 PROMPTS_DIR = ROOT / "prompts"
 FUSION_METHODS = ("rrf", "rerank")
+STAGE_LABELS = {
+    "route": "路由",
+    "requery": "问题重写",
+    "retrieve": "召回",
+    "retrieve_bm25": "BM25 召回",
+    "retrieve_vector": "向量召回",
+    "rerank": "重排",
+    "fusion": "融合",
+    "generate": "生成",
+}
+
+
+def merge_timings(left: dict[str, float], right: dict[str, float]) -> dict[str, float]:
+    """合并各节点上报的耗时；并行节点写不同键，不能简单覆盖。"""
+    return {**left, **right}
 
 
 class RAGState(TypedDict, total=False):
-    """图状态：问题、是否需要检索、改写后的查询、两路召回、融合结果、回答。"""
+    """图状态：问题、是否需要检索、改写后的查询、两路召回、融合结果、回答与耗时。"""
 
     question: str
     need_search: bool
@@ -66,6 +83,30 @@ class RAGState(TypedDict, total=False):
     vector: list[dict]
     fused: list[dict]
     answer: str
+    timings: Annotated[dict[str, float], merge_timings]
+
+
+def timed(stage: str | Callable[["Pipeline"], str]):
+    """记录节点耗时（毫秒），写进 state["timings"]。
+
+    stage 可以传固定名字，也可以传 `lambda pipeline: name`，按配置决定阶段名
+    （融合节点在 method=rerank 时记作「重排」，否则记作「融合」）。
+    """
+
+    def decorate(func: Callable[["Pipeline", RAGState], dict]):
+        @wraps(func)
+        def wrapper(self: "Pipeline", state: RAGState) -> dict:
+            started = time.perf_counter()
+            update = func(self, state)
+            name = stage(self) if callable(stage) else stage
+            update["timings"] = {
+                name: round((time.perf_counter() - started) * 1000, 1)
+            }
+            return update
+
+        return wrapper
+
+    return decorate
 
 
 class SearchDecision(BaseModel):
@@ -134,6 +175,7 @@ class Pipeline:
         )
         self.graph = self._build_graph()
 
+    @timed("route")
     def decide_search(self, state: RAGState) -> dict:
         """用 LLM 判断是否需要检索本地文档。"""
         decision = self.decide_chain.invoke(
@@ -141,6 +183,7 @@ class Pipeline:
         )
         return {"need_search": decision.need_search}
 
+    @timed("requery")
     def requery(self, state: RAGState) -> dict:
         """用 LLM 把问题改写成更适合检索的查询。"""
         result = self.requery_chain.invoke(
@@ -148,6 +191,7 @@ class Pipeline:
         )
         return {"search_query": result.query}
 
+    @timed("retrieve_bm25")
     def retrieve_bm25(self, state: RAGState) -> dict:
         """BM25 关键词召回。"""
         hits = search_keywords(
@@ -155,6 +199,7 @@ class Pipeline:
         )
         return {"bm25": [chunk for _, chunk in hits]}
 
+    @timed("retrieve_vector")
     def retrieve_vector(self, state: RAGState) -> dict:
         """向量语义召回。"""
         hits = search_vectors(
@@ -166,6 +211,7 @@ class Pipeline:
         )
         return {"vector": [chunk for _, chunk in hits]}
 
+    @timed(lambda pipeline: "rerank" if pipeline.config.method == "rerank" else "fusion")
     def fuse(self, state: RAGState) -> dict:
         """按配置的融合方式（rrf / rerank）排序两路召回结果。"""
         bm25 = state.get("bm25", [])
@@ -178,6 +224,7 @@ class Pipeline:
         fused = rrf_fuse([bm25, vector], self.config.k, self.config.weights)
         return {"fused": [chunk for _, chunk in fused][: self.config.context_n]}
 
+    @timed("generate")
     def answer(self, state: RAGState) -> dict:
         """把检索片段拼进 prompt，让 LLM 依据资料作答。"""
         chunks = state.get("fused", [])[: self.config.context_n]
@@ -285,6 +332,15 @@ def main() -> None:
             print(f"检索查询: {state['search_query']}")
         for chunk in state.get("fused", []):
             print(f"来源: {chunk['source']}#{chunk['start']}-{chunk['end']}")
+        timings = state.get("timings", {})
+        if timings:
+            print(
+                "耗时(ms): "
+                + "  ".join(
+                    f"{STAGE_LABELS.get(name, name)} {ms:.1f}"
+                    for name, ms in timings.items()
+                )
+            )
 
 
 if __name__ == "__main__":
