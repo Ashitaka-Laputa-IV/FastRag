@@ -7,7 +7,7 @@
 - 提示词单独放在 prompts/，便于迭代
 - 参数统一见 config/fastrag.toml；判断检索与生成回答分别在
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
-- BM25 适合术语叠加的查询，向量检索适合自然语言问句，plan_search 一次输出两条
+- 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -16,7 +16,7 @@
     $ uv run python -m fastrag.rag_graph
     问题（回车退出）: LangGraph 中如何实现 human-in-the-loop？
     BM25 查询: human-in-the-loop interrupt approval
-    向量查询: LangGraph 中如何实现 human-in-the-loop 的人工审批？
+    向量查询: How to implement human-in-the-loop human approval in LangGraph?
     来源:
       - data/langchain-docs/oss/python/langgraph/interrupts.md#0-1234
     回答: 依据资料，...（逐 token 输出）
@@ -64,7 +64,7 @@ class SearchPlan(BaseModel):
     )
     vector_query: str = Field(
         default="",
-        description="给向量检索的自然语言问句，保留原问题语言与上下文；不需要检索时为空字符串",
+        description="给向量检索的英文自然语言问句；不需要检索时为空字符串",
     )
 
 
