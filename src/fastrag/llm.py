@@ -2,7 +2,7 @@
 
 - 模型、provider、temperature 来自 config/fastrag.toml 的 [llm.*]
 - 接口地址与 key 环境变量由该角色引用的 [endpoints.*] 决定
-- 路由 / 问题重写 / 生成在 rag_graph 中分别创建，互不影响
+- 路由（判断检索 + 生成两路查询）/ 生成在 rag_graph 中分别创建，互不影响
 - API key 只从 .env 读取
 - main 用生成角色做一次最简单的问答，无交互
 
