@@ -1,12 +1,13 @@
 """用 langgraph 编排 RAG 流程。
 
-节点链路：decide_search(LLM) -> requery(LLM) -> bm25 / vector 并行召回
+节点链路：plan_search(LLM：判断是否检索 + 生成两路查询) -> bm25 / vector 并行召回
           -> fuse(RRF 或 rerank) -> answer(LLM)
 
 - 流程图见 README.md
 - 提示词单独放在 prompts/，便于迭代
-- 参数统一见 config/fastrag.toml；路由、问题重写、生成分别在
-  [llm.route]、[llm.requery]、[llm.answer] 配置，可使用不同模型与厂家
+- 参数统一见 config/fastrag.toml；判断检索与生成回答分别在
+  [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
+- BM25 适合术语叠加的查询，向量检索适合自然语言问句，plan_search 一次输出两条
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -14,7 +15,8 @@
 输出示例:
     $ uv run python -m fastrag.rag_graph
     问题（回车退出）: LangGraph 中如何实现 human-in-the-loop？
-    检索查询: LangGraph human-in-the-loop 实现方法
+    BM25 查询: human-in-the-loop interrupt approval
+    向量查询: LangGraph 中如何实现 human-in-the-loop 的人工审批？
     来源:
       - data/langchain-docs/oss/python/langgraph/interrupts.md#0-1234
     回答: 依据资料，...（逐 token 输出）
@@ -40,27 +42,30 @@ PROMPTS_DIR = ROOT / "prompts"
 
 
 class RAGState(TypedDict, total=False):
-    """图状态：问题、是否需要检索、改写后的查询、两路召回、融合结果、回答。"""
+    """图状态：问题、是否需要检索、两路查询、两路召回、融合结果、回答。"""
 
     question: str
     need_search: bool
-    search_query: str
+    bm25_query: str
+    vector_query: str
     bm25: list[dict]
     vector: list[dict]
     fused: list[dict]
     answer: str
 
 
-class SearchDecision(BaseModel):
-    """decide_search 节点的结构化输出。"""
+class SearchPlan(BaseModel):
+    """plan_search 节点的结构化输出：是否检索 + 两路各自的查询。"""
 
     need_search: bool = Field(description="回答该问题是否需要检索本地文档库")
-
-
-class SearchQuery(BaseModel):
-    """requery 节点的结构化输出。"""
-
-    query: str = Field(description="改写后、适合文档检索的查询")
+    bm25_query: str = Field(
+        default="",
+        description="给 BM25 的英文关键词查询，空格分隔的术语；不需要检索时为空字符串",
+    )
+    vector_query: str = Field(
+        default="",
+        description="给向量检索的自然语言问句，保留原问题语言与上下文；不需要检索时为空字符串",
+    )
 
 
 def load_prompt(name: str) -> str:
@@ -75,12 +80,10 @@ class Pipeline:
         load_env()
         self.config = config
         self.route_llm: BaseChatModel = build_llm(config.llm.route)
-        self.requery_llm: BaseChatModel = build_llm(config.llm.requery)
         self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
-        self.decide_chain = self.route_llm.with_structured_output(SearchDecision)
-        self.requery_chain = self.requery_llm.with_structured_output(SearchQuery)
+        self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
         self.prompts = {
-            name: load_prompt(name) for name in ("decide_search", "requery", "answer")
+            name: load_prompt(name) for name in ("search_plan", "answer")
         }
         self.chunks = load_chunks(config)
         self.vectors = ensure_vectors(config, self.chunks)
@@ -89,42 +92,51 @@ class Pipeline:
         )
         self.graph = self._build_graph()
 
-    def decide_search(self, state: RAGState) -> dict:
-        """用 LLM 判断是否需要检索本地文档。"""
-        decision = self.decide_chain.invoke(
-            self.prompts["decide_search"].format(question=state["question"])
-        )
-        return {"need_search": decision.need_search}
+    def plan_search(self, state: RAGState) -> dict:
+        """一次调用同时判断是否检索，并给出两路各自的查询。
 
-    def requery(self, state: RAGState) -> dict:
-        """用 LLM 把问题改写成更适合检索的查询。"""
-        result = self.requery_chain.invoke(
-            self.prompts["requery"].format(question=state["question"])
+        不需要检索时不生成查询，直接返回空字符串；需要检索时若模型漏填某一路，
+        就退回原始问题，保证召回节点总能拿到可用的查询。
+        """
+        plan = self.plan_chain.invoke(
+            self.prompts["search_plan"].format(question=state["question"])
         )
-        return {"search_query": result.query}
+        if not plan.need_search:
+            return {"need_search": False, "bm25_query": "", "vector_query": ""}
+
+        question = state["question"]
+        return {
+            "need_search": True,
+            "bm25_query": plan.bm25_query.strip() or question,
+            "vector_query": plan.vector_query.strip() or question,
+        }
 
     def retrieve_bm25(self, state: RAGState) -> dict:
-        """BM25 关键词召回。"""
+        """BM25 关键词召回，使用术语叠加的 bm25_query。"""
         hits = search_keywords(
             self.config,
-            state["search_query"],
+            state["bm25_query"],
             self.config.retrieval.bm25_candidates,
         )
         return {"bm25": [chunk for _, chunk in hits]}
 
     def retrieve_vector(self, state: RAGState) -> dict:
-        """向量语义召回。"""
+        """向量语义召回，使用自然语言问句 vector_query。"""
         hits = search_vectors(
             self.config,
             self.vectors,
             self.chunks,
-            state["search_query"],
+            state["vector_query"],
             self.config.retrieval.vector_candidates,
         )
         return {"vector": [chunk for _, chunk in hits]}
 
     def fuse(self, state: RAGState) -> dict:
-        """按配置的融合方式（rrf / rerank）排序两路召回结果。"""
+        """按配置的融合方式（rrf / rerank）排序两路召回结果。
+
+        rerank 分支用原始问题做 cross-encoder 输入（保留完整语义），
+        与 RRF 只看名次的口径不同，两种方式都按 retrieval.top_n 截断。
+        """
         bm25 = state.get("bm25", [])
         vector = state.get("vector", [])
         if not bm25 and not vector:
@@ -183,27 +195,26 @@ class Pipeline:
         }
 
     @staticmethod
-    def route_after_decide(state: RAGState) -> str:
-        """需要检索就改写查询，否则直接回答。"""
-        return "requery" if state.get("need_search", True) else "answer"
+    def route_after_plan(state: RAGState) -> list[str]:
+        """需要检索就同时走 BM25 与向量两路，否则直接回答。"""
+        if not state.get("need_search", True):
+            return ["answer"]
+        return ["retrieve_bm25", "retrieve_vector"]
 
     def _build_graph(self):
         graph = StateGraph(RAGState)
-        graph.add_node("decide_search", self.decide_search)
-        graph.add_node("requery", self.requery)
+        graph.add_node("plan_search", self.plan_search)
         graph.add_node("retrieve_bm25", self.retrieve_bm25)
         graph.add_node("retrieve_vector", self.retrieve_vector)
         graph.add_node("fuse", self.fuse)
         graph.add_node("answer", self.answer)
 
-        graph.add_edge(START, "decide_search")
+        graph.add_edge(START, "plan_search")
         graph.add_conditional_edges(
-            "decide_search",
-            self.route_after_decide,
-            {"requery": "requery", "answer": "answer"},
+            "plan_search",
+            self.route_after_plan,
+            ["retrieve_bm25", "retrieve_vector", "answer"],
         )
-        graph.add_edge("requery", "retrieve_bm25")
-        graph.add_edge("requery", "retrieve_vector")
         graph.add_edge("retrieve_bm25", "fuse")
         graph.add_edge("retrieve_vector", "fuse")
         graph.add_edge("fuse", "answer")
@@ -246,8 +257,11 @@ def main() -> None:
         print()
 
         state = run.output or {}
-        if state.get("search_query"):
-            print(f"检索查询: {state['search_query']}")
+        if state.get("need_search"):
+            print(f"BM25 查询: {state.get('bm25_query', '')}")
+            print(f"向量查询: {state.get('vector_query', '')}")
+        else:
+            print("未检索本地文档")
         for chunk in state.get("fused", []):
             print(f"来源: {chunk['source']}#{chunk['start']}-{chunk['end']}")
 

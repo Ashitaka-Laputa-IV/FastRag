@@ -4,7 +4,7 @@
 
 - 路径统一解析到仓库根目录
 - [endpoints.*] 描述厂家（base_url + key 环境变量），各模型按需引用
-- 嵌入、重排、路由、问题重写、生成可以分别使用不同的厂家与模型
+- 嵌入、重排、判断检索（含两路查询）、生成可以分别使用不同的厂家与模型
 - 召回条数（BM25 / 向量分开配置）与输出条数（top_n）只保留一份
 """
 
@@ -71,10 +71,9 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class LLMRoles:
-    """路由、问题重写、生成三个独立的 LLM 角色。"""
+    """判断检索并生成查询、生成回答两个独立的 LLM 角色。"""
 
     route: LLMConfig
-    requery: LLMConfig
     answer: LLMConfig
 
 
@@ -216,7 +215,6 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
         ),
         llm=LLMRoles(
             route=_llm(llm, endpoints, "route"),
-            requery=_llm(llm, endpoints, "requery"),
             answer=_llm(llm, endpoints, "answer"),
         ),
         reranker=RerankerConfig(

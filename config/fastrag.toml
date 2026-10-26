@@ -34,17 +34,11 @@ dimensions = 2560         # Qwen3-Embedding-4B 输出维度
 timeout = 120             # 单次请求超时（秒）
 max_retries = 3
 
-# 路由 / 问题重写 / 生成可以分别配置模型、厂家与温度。
+# 判断检索并生成两路查询 / 生成回答可以分别配置模型、厂家与温度。
 [llm.route]
 endpoint = "siliconflow"
 model = "deepseek-ai/DeepSeek-V4.1-Flash"
 provider = "openai"  # init_chat_model 的 model_provider
-temperature = 0.7
-
-[llm.requery]
-endpoint = "siliconflow"
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
-provider = "openai"
 temperature = 0.7
 
 [llm.answer]
