@@ -4,7 +4,7 @@
   调用任意 Cohere 风格的 `/rerank` 接口（交叉编码器，默认配置指向 SiliconFlow）
 - 排序、top_n 与 relevance_score 写回 metadata 均由 `compress_documents` 提供
 - 参数来自 config/fastrag.toml 的 [reranker]、[endpoints]、[retrieval]
-- 演示流程：BM25 召回 candidates 条 -> 重排 -> 输出 top_n 条
+- 演示流程：BM25 召回 bm25_candidates 条 -> 重排 -> 输出 top_n 条
   （`rerank_chunks` 只依赖 chunk 列表，可接任意检索器的候选）
 
 用法:
@@ -75,7 +75,7 @@ def main() -> None:
 
     load_env()
     config = load_config()
-    candidates = search_keywords(config, args.text, config.retrieval.candidates)
+    candidates = search_keywords(config, args.text, config.retrieval.bm25_candidates)
     documents = rerank_chunks(
         build_reranker(config), args.text, [chunk for _, chunk in candidates]
     )

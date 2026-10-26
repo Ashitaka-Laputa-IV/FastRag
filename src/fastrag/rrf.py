@@ -70,12 +70,12 @@ def main() -> None:
     load_env()
     config = load_config()
 
-    bm25_hits = search_keywords(config, args.text, config.retrieval.candidates)
+    bm25_hits = search_keywords(config, args.text, config.retrieval.bm25_candidates)
 
     chunks = load_chunks(config)
     vectors = ensure_vectors(config, chunks)
     vector_hits = search_vectors(
-        config, vectors, chunks, args.text, config.retrieval.candidates
+        config, vectors, chunks, args.text, config.retrieval.vector_candidates
     )
 
     rankings = [[chunk for _, chunk in bm25_hits], [chunk for _, chunk in vector_hits]]

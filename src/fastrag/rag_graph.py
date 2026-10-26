@@ -106,7 +106,9 @@ class Pipeline:
     def retrieve_bm25(self, state: RAGState) -> dict:
         """BM25 关键词召回。"""
         hits = search_keywords(
-            self.config, state["search_query"], self.config.retrieval.candidates
+            self.config,
+            state["search_query"],
+            self.config.retrieval.bm25_candidates,
         )
         return {"bm25": [chunk for _, chunk in hits]}
 
@@ -117,7 +119,7 @@ class Pipeline:
             self.vectors,
             self.chunks,
             state["search_query"],
-            self.config.retrieval.candidates,
+            self.config.retrieval.vector_candidates,
         )
         return {"vector": [chunk for _, chunk in hits]}
 

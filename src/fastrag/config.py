@@ -5,7 +5,7 @@
 - 路径统一解析到仓库根目录
 - [endpoints.*] 描述厂家（base_url + key 环境变量），各模型按需引用
 - 嵌入、重排、路由、问题重写、生成可以分别使用不同的厂家与模型
-- 召回条数（candidates）与输出条数（top_n）只保留一份
+- 召回条数（BM25 / 向量分开配置）与输出条数（top_n）只保留一份
 """
 
 import os
@@ -99,7 +99,8 @@ class BM25Config:
 class RetrievalConfig:
     """召回与输出条数，流水线和各命令行工具共用。"""
 
-    candidates: int
+    bm25_candidates: int
+    vector_candidates: int
     top_n: int
 
 
@@ -186,7 +187,7 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
         raise SystemExit(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
     if len(fusion["weights"]) != 2:
         raise SystemExit("fusion.weights 必须包含两路权重（BM25、向量）")
-    for key in ("candidates", "top_n"):
+    for key in ("bm25_candidates", "vector_candidates", "top_n"):
         if retrieval[key] < 1:
             raise SystemExit(f"retrieval.{key} 必须大于 0")
 
@@ -227,7 +228,8 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
             method=bm25["method"],
         ),
         retrieval=RetrievalConfig(
-            candidates=retrieval["candidates"],
+            bm25_candidates=retrieval["bm25_candidates"],
+            vector_candidates=retrieval["vector_candidates"],
             top_n=retrieval["top_n"],
         ),
         fusion=FusionConfig(

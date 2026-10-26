@@ -63,10 +63,11 @@ stopwords = "english"  # bm25s 内置停用词（"english"/"en" 或自定义列�
 method = "lucene"      # 打分方法：lucene / robertson / atire / bm25l / bm25+
 
 [retrieval]
-candidates = 20  # BM25 / 向量两路各召回的候选条数
-top_n = 5        # 最终送入 LLM 的片段数，也是各命令行工具的默认返回条数
+bm25_candidates = 20   # BM25 召回条数
+vector_candidates = 20 # 向量召回条数
+top_n = 5              # 最终送入 LLM 的片段数，也是各命令行工具的默认返回条数
 
 [fusion]
 method = "rrf"       # 融合排序方式：rrf | rerank
 rrf_k = 60           # method=rrf 时的平滑常数：score = Σ w / (rrf_k + rank)
-weights = [1.0, 1.0] # method=rrf 时两路权重（BM25、向量）
+weights = [1.1, 1.0] # 两路权重（BM25、向量），BM25 略高
