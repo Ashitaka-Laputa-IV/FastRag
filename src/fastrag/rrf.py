@@ -7,7 +7,7 @@
 （配置项 fusion.rrf_k，默认 60），w_i 是各路权重；只出现在单路的文档
 同样按该式计分。
 
-- 参数来自 config/fastrag.toml（[fusion]、[retrieval]）
+- 参数来自配置文件（[fusion]、[retrieval]）
 - 两路候选：keyword_search（BM25）与 embed_chunks（向量余弦相似度）
 - 用法:
     uv run python -m fastrag.rrf "human in the loop approval"

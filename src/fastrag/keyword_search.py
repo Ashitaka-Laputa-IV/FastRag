@@ -1,6 +1,6 @@
 """用 bm25s 对切块后的 chunk 做 BM25 关键词检索。
 
-- 索引与检索参数来自 config/fastrag.toml（[paths]、[bm25]、[retrieval]）
+- 索引与检索参数来自配置文件（[paths]、[bm25]、[retrieval]）
 - 语料是 chunk_docs 产出的 data/chunks.jsonl（每行含 id/source/start/end/token_count/text）
 - 索引连同 corpus 落盘到 data/bm25-index/，检索时无需重新切块
 - 索引同时写入 meta.json（语料 sha256 + method/stopwords + 切块参数）；

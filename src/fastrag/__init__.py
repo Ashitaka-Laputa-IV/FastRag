@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from fastrag!")
+"""FastRag：本地文档的混合检索（BM25 + 向量）问答示例。"""

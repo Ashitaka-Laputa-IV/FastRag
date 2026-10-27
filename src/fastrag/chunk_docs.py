@@ -1,6 +1,6 @@
 """用 chonkie 把 data/langchain-docs/ 下的示例文档切成句子级 chunk。
 
-- 参数全部来自 config/fastrag.toml（[paths]、[chunking]）
+- 参数全部来自配置文件（[paths]、[chunking]）
 - 切分器：chonkie.SentenceChunker（按句末标点与换行切句）
 - 长度：按 token 计量（tiktoken 近似），默认 512 token（约 500），
   便于对齐后续嵌入模型的上下文上限；tiktoken 不是嵌入模型的分词器，
@@ -26,7 +26,7 @@ import re
 import tiktoken
 from chonkie import SentenceChunker
 
-from fastrag.config import ROOT, Config, load_config
+from fastrag.config import Config, display_path, load_config
 from fastrag.errors import FastragError, run_cli
 
 
@@ -74,7 +74,7 @@ def build_records(config: Config) -> list[dict]:
 
     records = []
     for path in iter_docs(config):
-        source = path.relative_to(ROOT).as_posix()
+        source = display_path(path)
         text, offset = strip_boilerplate(
             path.read_text(encoding="utf-8"), pattern
         )

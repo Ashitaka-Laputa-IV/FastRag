@@ -1,6 +1,6 @@
 """用 init_chat_model 创建一个通用对话模型。
 
-- 模型、provider、temperature、thinking 来自 config/fastrag.toml 的 [llm.*]
+- 模型、provider、temperature、thinking 来自配置文件的 [llm.*]
 - 接口地址与 key 环境变量由该角色引用的 [endpoints.*] 决定；
   api_key_env 留空表示本地服务，客户端用一个占位 key
 - 路由（判断检索 + 生成两路查询）/ 生成在 rag_graph 中分别创建，互不影响

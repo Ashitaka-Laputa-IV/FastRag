@@ -1,13 +1,17 @@
-"""统一读取 config/fastrag.toml，并加载 .env 里的 API key。
+"""统一读取配置，并加载 .env 里的 API key。
 
-所有模块共用这一份配置，不再各自维护 TOML 文件与加载逻辑：
+所有模块共用这一份配置，不再各自维护加载逻辑：
 
-- 路径统一解析到仓库根目录
+- 默认配置与提示词随包分发（`fastrag.resources`），wheel 安装后依然可用；
+- `FASTRAG_HOME` 指定工作目录（默认：源码树根目录，安装 wheel 后为当前目录），
+  配置里的相对路径、`.env`、可选的 `prompts/` 覆盖都在该目录下解析；
+- `FASTRAG_CONFIG` 可直接指向某份配置（优先于 `FASTRAG_HOME/config/fastrag.toml`）；
 - [endpoints.*] 描述厂家（base_url + key 环境变量），各模型按需引用
 - 嵌入、重排、判断检索（含两路查询）、生成可以分别使用不同的厂家与模型
 - 召回条数（BM25 / 向量分开配置）与输出条数（top_n）只保留一份
 """
 
+import importlib.resources
 import os
 import pathlib
 import re
@@ -16,10 +20,49 @@ from dataclasses import dataclass
 
 from fastrag.errors import FastragError
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = ROOT / "config" / "fastrag.toml"
-ENV_PATH = ROOT / ".env"
+PACKAGE_RESOURCES = importlib.resources.files("fastrag.resources")
 FUSION_METHODS = ("rrf", "rerank")
+
+# editable 安装时 __file__ 位于 <repo>/src/fastrag/，据此识别源码树；
+# 装成 wheel 后这里指向 site-packages，不再是项目根目录。
+_SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+
+
+def home() -> pathlib.Path:
+    """工作目录：数据、`.env`、自定义配置与提示词的根。
+
+    优先级：`FASTRAG_HOME` > 源码树根目录（editable 运行）> 当前目录。
+    """
+    override = os.environ.get("FASTRAG_HOME")
+    if override:
+        return pathlib.Path(override).expanduser().resolve()
+    if (_SOURCE_ROOT / "pyproject.toml").exists():
+        return _SOURCE_ROOT
+    return pathlib.Path.cwd()
+
+
+def default_config_path() -> pathlib.Path:
+    """默认配置：`FASTRAG_HOME/config/fastrag.toml`，不存在时用包内模板。"""
+    user_config = home() / "config" / "fastrag.toml"
+    if user_config.exists():
+        return user_config
+    return pathlib.Path(str(PACKAGE_RESOURCES / "config" / "fastrag.toml"))
+
+
+def prompt_path(name: str) -> pathlib.Path:
+    """提示词文件：优先 `FASTRAG_HOME/prompts/<name>.txt`，否则用包内模板。"""
+    override = home() / "prompts" / f"{name}.txt"
+    if override.exists():
+        return override
+    return pathlib.Path(str(PACKAGE_RESOURCES / "prompts" / f"{name}.txt"))
+
+
+def display_path(path: pathlib.Path) -> str:
+    """相对工作目录的展示路径；在目录外时退回绝对路径。"""
+    try:
+        return path.resolve().relative_to(home()).as_posix()
+    except ValueError:
+        return str(path.resolve())
 
 
 @dataclass(frozen=True)
@@ -124,7 +167,7 @@ class FusionConfig:
 
 @dataclass(frozen=True)
 class Config:
-    """config/fastrag.toml 的完整内容。"""
+    """配置文件的完整内容。"""
 
     paths: Paths
     endpoints: dict[str, EndpointConfig]
@@ -137,8 +180,9 @@ class Config:
     fusion: FusionConfig
 
 
-def load_env(path: pathlib.Path = ENV_PATH) -> None:
-    """把 .env 里的键值写进环境变量（不覆盖已存在的值）。"""
+def load_env(path: pathlib.Path | None = None) -> None:
+    """把 .env 里的键值写进环境变量（不覆盖已存在的值），默认读工作目录。"""
+    path = home() / ".env" if path is None else path
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -150,8 +194,8 @@ def load_env(path: pathlib.Path = ENV_PATH) -> None:
 
 
 def _resolve(path: str) -> pathlib.Path:
-    """把配置里的相对路径解析到仓库根目录下。"""
-    return (ROOT / path).resolve()
+    """把配置里的相对路径解析到工作目录下。"""
+    return (home() / path).resolve()
 
 
 def _endpoint(
@@ -183,16 +227,15 @@ def _llm(
 def load_config(path: pathlib.Path | None = None) -> Config:
     """读取并校验统一配置。
 
-    默认读 config/fastrag.toml；设置环境变量 FASTRAG_CONFIG 可指向其他文件
-    （例如全本地的 config/fastrag.local.toml），不必覆盖默认配置。
+    解析顺序：显式 path > `FASTRAG_CONFIG` > `FASTRAG_HOME/config/fastrag.toml`
+    > 包内默认配置（`fastrag.resources/config/fastrag.toml`）。
     """
     if path is None:
         override = os.environ.get("FASTRAG_CONFIG")
-        path = (
-            pathlib.Path(override).expanduser().resolve()
-            if override
-            else CONFIG_PATH
-        )
+        if override:
+            path = pathlib.Path(override).expanduser().resolve()
+        else:
+            path = default_config_path()
     if not path.exists():
         raise FastragError(f"配置文件不存在: {path}")
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
