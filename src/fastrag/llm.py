@@ -22,6 +22,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
 from fastrag.config import LLMConfig, load_config, load_env
+from fastrag.errors import FastragError, run_cli
 
 DEMO_QUESTION = "用一句话解释什么是 RAG。"
 
@@ -37,7 +38,7 @@ def build_llm(config: LLMConfig, thinking: bool | None = None) -> BaseChatModel:
     api_key = os.environ.get(config.endpoint.api_key_env)
     if not api_key:
         if config.endpoint.api_key_env:
-            raise SystemExit(
+            raise FastragError(
                 f"缺少 {config.endpoint.api_key_env}，请先 cp .env.example .env 并填写"
             )
         api_key = "local"
@@ -66,4 +67,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -40,6 +40,7 @@ from fastrag.embed_chunks import (
     ensure_vectors,
     search as search_vectors,
 )
+from fastrag.errors import run_cli
 from fastrag.keyword_search import load_index, search as search_keywords
 from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
@@ -291,4 +292,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

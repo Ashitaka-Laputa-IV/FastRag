@@ -10,6 +10,7 @@ import json
 import pathlib
 
 from fastrag.config import Config
+from fastrag.errors import FastragError
 
 BLOCK_SIZE = 1 << 20
 
@@ -18,7 +19,7 @@ def load_chunks(config: Config) -> list[dict]:
     """读取 JSONL 形式的 chunk 语料；缺失时提示先切块。"""
     path = config.paths.chunks_file
     if not path.exists():
-        raise SystemExit(
+        raise FastragError(
             f"chunk 语料不存在: {path}\n"
             "请先运行: uv run python -m fastrag.chunk_docs"
         )
@@ -39,7 +40,7 @@ def chunks_sha256(path: pathlib.Path) -> str:
     避免「内容变了但 mtime 没变」时拿到旧指纹。
     """
     if not path.exists():
-        raise SystemExit(
+        raise FastragError(
             f"chunk 语料不存在: {path}\n"
             "请先运行: uv run python -m fastrag.chunk_docs"
         )
