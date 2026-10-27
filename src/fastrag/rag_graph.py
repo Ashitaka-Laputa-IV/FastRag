@@ -84,9 +84,9 @@ class SearchPlan(BaseModel):
     )
 
 
-def load_prompt(name: str) -> str:
+def load_prompt(name: str) -> PromptTemplate:
     """读取提示词模板：优先工作目录下的 prompts/，否则用包内默认模板。"""
-    return prompt_path(name).read_text(encoding="utf-8")
+    return PromptTemplate.from_file(prompt_path(name), encoding="utf-8")
 
 
 class Pipeline:
@@ -105,20 +105,13 @@ class Pipeline:
         # 提示词 + 模型链：每个角色一条「主模型重试 -> 备用模型重试」链，
         # 节点里不再手写格式化与重试循环。answer/chat 共用同一条模型链。
         answer_model = self._model_chain(config.llm.answer)
-        self.plan_chain = (
-            PromptTemplate.from_template(self.prompts["search_plan"])
-            | self._model_chain(config.llm.route, SearchPlan)
+        self.plan_chain = self.prompts["search_plan"] | self._model_chain(
+            config.llm.route, SearchPlan
         )
         self.answer_chain = (
-            PromptTemplate.from_template(self.prompts["answer"])
-            | answer_model
-            | StrOutputParser()
+            self.prompts["answer"] | answer_model | StrOutputParser()
         )
-        self.chat_chain = (
-            PromptTemplate.from_template(self.prompts["chat"])
-            | answer_model
-            | StrOutputParser()
-        )
+        self.chat_chain = self.prompts["chat"] | answer_model | StrOutputParser()
         self.chunks = load_chunks(config)
         self.embeddings = build_embeddings(config)
         self.vectors = ensure_vectors(config, self.chunks, self.embeddings)
