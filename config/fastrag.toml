@@ -20,8 +20,8 @@ api_key_env = "SILICONFLOW_API_KEY"
 # api_key_env = "OPENAI_API_KEY"
 
 [chunking]
-# 长度一律按 token 计量（tiktoken 编码），便于对齐嵌入模型的上下文上限。
-tokenizer = "cl100k_base"  # tiktoken 编码名，与 OpenAI 嵌入模型一致
+# 长度按 token 计量（tiktoken 近似），用于控制块大小；与嵌入模型分词器有偏差。
+tokenizer = "cl100k_base"  # tiktoken 编码名，仅用于估算长度；与 Qwen 分词器存在偏差
 chunk_size = 512           # 单块 token 上限（约 500）
 chunk_overlap = 128        # 相邻块重叠 token 数（约 25%）
 include_delim = "prev"     # 句末分隔符归入前一块，保证 text == 原文[start:end]
