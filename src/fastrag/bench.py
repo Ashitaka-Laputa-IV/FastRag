@@ -1,6 +1,6 @@
 """对 RAG 各阶段做耗时基准测试。
 
-固定 3 个问题，每个问题跑 runs 次（默认 3），统计检索规划（判断是否检索 +
+固定 8 个问题，每个问题跑 runs 次（默认 3），统计检索规划（判断是否检索 +
 生成两路查询）、召回、融合/重排、生成的耗时；跑完输出 Markdown 表格，并把
 明细写入 JSON 方便复查。
 
@@ -50,6 +50,11 @@ QUESTIONS = (
     "LangGraph 中如何实现 human-in-the-loop？",
     "如何让 LangGraph 的图流式输出 token？",
     "LangChain 的 Agent 如何调用工具？",
+    "LangGraph 如何用 checkpointer 持久化会话状态？",
+    "LangChain 如何搭建 RAG 检索链？",
+    "LangGraph 的条件边（conditional edges）怎么用？",
+    "LangChain 的文本分割器怎么选？",
+    "LangGraph 如何实现子图与并行分支？",
 )
 RUNS = 3
 STAGES = ("plan", "retrieve", "fusion", "generate")
@@ -80,9 +85,14 @@ def describe(values: list[float]) -> dict[str, float]:
 
 
 def summarize(records: list[dict]) -> dict:
-    """按问题分组统计各阶段与端到端耗时，再给出全部运行的汇总。"""
+    """按问题分组统计各阶段与端到端耗时，再给出全部运行的汇总。
+
+    失败的尝试（带 error 字段）不参与统计，只记录次数，避免厂家 429/503
+    让整轮基准中断或污染均值。
+    """
+    usable = [record for record in records if "error" not in record]
     groups: dict[str, list[dict]] = {}
-    for record in records:
+    for record in usable:
         groups.setdefault(record["question"], []).append(record)
 
     per_question = []
@@ -98,11 +108,13 @@ def summarize(records: list[dict]) -> dict:
             }
         )
     overall = {
-        "runs": len(records),
+        "runs": len(usable),
+        "attempts": len(records),
+        "failures": len(records) - len(usable),
         "stages": {
-            stage: describe([row[stage] for row in records]) for stage in STAGES
+            stage: describe([row[stage] for row in usable]) for stage in STAGES
         },
-        "wall": describe([row["wall_ms"] for row in records]),
+        "wall": describe([row["wall_ms"] for row in usable]),
     }
     return {"per_question": per_question, "overall": overall}
 
@@ -138,6 +150,8 @@ def print_report(summary: dict, labels: dict[str, str]) -> None:
     overall = summary["overall"]
     print(f"\n### 全部 {overall['runs']} 次运行")
     print(markdown_table(overall["stages"], overall["wall"], labels))
+    if overall.get("failures"):
+        print(f"\n另有 {overall['failures']} 次请求失败，未计入统计。")
 
 
 def run(
@@ -145,15 +159,34 @@ def run(
 ) -> dict:
     """预热后逐个问题重复运行，返回可落盘的明细与统计。"""
     first_token_only = pipeline.first_token_only
-    pipeline.graph.invoke({"question": questions[0]})
-    print("预热完成（不计入统计）")
+    try:
+        pipeline.graph.invoke({"question": questions[0]})
+        print("预热完成（不计入统计）")
+    except Exception as error:  # noqa: BLE001
+        print(f"预热失败（{type(error).__name__}），继续统计", flush=True)
 
     records = []
     total = len(questions) * runs
     for question in questions:
         for index in range(1, runs + 1):
             started = time.perf_counter()
-            state = pipeline.graph.invoke({"question": question})
+            try:
+                state = pipeline.graph.invoke({"question": question})
+            except Exception as error:  # noqa: BLE001
+                wall_ms = (time.perf_counter() - started) * 1000
+                records.append(
+                    {
+                        "question": question,
+                        "run": index,
+                        "wall_ms": round(wall_ms, 1),
+                        "error": f"{type(error).__name__}: {str(error)[:200]}",
+                    }
+                )
+                print(
+                    f"[{len(records)}/{total}] {question} 失败 {type(error).__name__}",
+                    flush=True,
+                )
+                continue
             wall_ms = (time.perf_counter() - started) * 1000
             stages = measure(state.get("timings", {}))
             record = {

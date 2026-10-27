@@ -1,0 +1,64 @@
+# 全云配置：嵌入、规划、回答全部走 SiliconFlow。
+# 与 config/fastrag.toml 的区别只有 thinking = false（规划与回答都不开思考），
+# 便于和本地、混合方案在同一口径下比较首 token。
+#
+# 用法：
+#   uv run python -m fastrag.bench --config config/fastrag.cloud.toml
+
+[paths]
+docs_dir = "data/langchain-docs"
+chunks_file = "data/chunks.jsonl"
+embeddings_dir = "data/embeddings"  # Qwen3-Embedding-4B 的 2560 维向量
+bm25_index_dir = "data/bm25-index"
+
+[endpoints.siliconflow]
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+
+[chunking]
+tokenizer = "cl100k_base"
+chunk_size = 512
+chunk_overlap = 128
+include_delim = "prev"
+
+[embedding]
+endpoint = "siliconflow"
+model = "Qwen/Qwen3-Embedding-4B"
+batch_size = 32
+dimensions = 2560
+timeout = 120
+max_retries = 3
+
+[llm.route]
+endpoint = "siliconflow"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+provider = "openai"
+temperature = 0.7
+thinking = false
+
+[llm.answer]
+endpoint = "siliconflow"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+provider = "openai"
+temperature = 0.7
+thinking = false
+
+[reranker]
+endpoint = "siliconflow"
+model = "Qwen/Qwen3-Reranker-4B"
+timeout = 60
+
+[bm25]
+stopwords = "english"
+method = "lucene"
+min_score = 0.0
+
+[retrieval]
+bm25_candidates = 20
+vector_candidates = 20
+top_n = 5
+
+[fusion]
+method = "rrf"
+rrf_k = 60
+weights = [1.1, 1.0]
