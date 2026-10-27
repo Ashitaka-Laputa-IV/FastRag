@@ -35,8 +35,12 @@ from pydantic import BaseModel, Field
 
 from fastrag.chunks import load_chunks
 from fastrag.config import ROOT, Config, load_config, load_env
-from fastrag.embed_chunks import ensure_vectors, search as search_vectors
-from fastrag.keyword_search import search as search_keywords
+from fastrag.embed_chunks import (
+    build_embeddings,
+    ensure_vectors,
+    search as search_vectors,
+)
+from fastrag.keyword_search import load_index, search as search_keywords
 from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
@@ -77,7 +81,11 @@ def load_prompt(name: str) -> str:
 
 
 class Pipeline:
-    """把图需要的配置与检索资源准备好，节点函数通过闭包使用。"""
+    """把图需要的配置与检索资源准备好，节点函数通过闭包使用。
+
+    语料、向量、BM25 索引与嵌入客户端都只初始化一次：
+    召回节点并发执行时不会重复读索引或新建 HTTP 客户端。
+    """
 
     def __init__(self, config: Config):
         load_env()
@@ -89,7 +97,9 @@ class Pipeline:
             name: load_prompt(name) for name in ("search_plan", "answer", "chat")
         }
         self.chunks = load_chunks(config)
-        self.vectors = ensure_vectors(config, self.chunks)
+        self.embeddings = build_embeddings(config)
+        self.vectors = ensure_vectors(config, self.chunks, self.embeddings)
+        self.retriever = load_index(config)
         self.reranker = (
             build_reranker(config) if config.fusion.method == "rerank" else None
         )
@@ -115,8 +125,9 @@ class Pipeline:
         }
 
     def retrieve_bm25(self, state: RAGState) -> dict:
-        """BM25 关键词召回，使用术语叠加的 bm25_query。"""
+        """BM25 关键词召回，使用术语叠加的 bm25_query 与复用的索引。"""
         hits = search_keywords(
+            self.retriever,
             self.config,
             state["bm25_query"],
             self.config.retrieval.bm25_candidates,
@@ -124,9 +135,9 @@ class Pipeline:
         return {"bm25": [chunk for _, chunk in hits]}
 
     def retrieve_vector(self, state: RAGState) -> dict:
-        """向量语义召回，使用自然语言问句 vector_query。"""
+        """向量语义召回，使用自然语言问句 vector_query 与复用的嵌入客户端。"""
         hits = search_vectors(
-            self.config,
+            self.embeddings,
             self.vectors,
             self.chunks,
             state["vector_query"],

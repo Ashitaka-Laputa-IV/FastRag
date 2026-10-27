@@ -116,13 +116,19 @@ def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> Non
     )
 
 
-def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
+def ensure_vectors(
+    config: Config,
+    chunks: list[dict],
+    embeddings: OpenAIEmbeddings | None = None,
+) -> np.ndarray:
     """已有可用向量则直接加载，否则嵌入并落盘。
 
     复用条件除模型/维度/条数外，还要求 chunks.jsonl 的内容指纹一致：
     只改文本或切块参数、条数恰好不变时，旧向量不再可用。
     条数相等只能说明数量对得上，发现不了「条数相同、切块边界或文本变了」；
     这种行序错位只能靠全文内容指纹发现。
+
+    embeddings 传入已有客户端时复用它做重新嵌入，避免再建一份连接。
     """
     vectors_path = config.paths.embeddings_dir / "vectors.npy"
     manifest_path = config.paths.embeddings_dir / "manifest.json"
@@ -149,7 +155,7 @@ def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
         print("未找到已嵌入向量，开始嵌入 ...")
 
     started = time.perf_counter()
-    vectors = embed_chunks(build_embeddings(config), config, chunks)
+    vectors = embed_chunks(embeddings or build_embeddings(config), config, chunks)
     save_vectors(config, chunks, vectors)
     print(
         f"{len(chunks)} 个 chunk -> {vectors.shape} float32，"
@@ -159,7 +165,7 @@ def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
 
 
 def search(
-    config: Config,
+    embeddings: OpenAIEmbeddings,
     vectors: np.ndarray,
     chunks: list[dict],
     text: str,
@@ -169,8 +175,9 @@ def search(
 
     度量：余弦相似度 —— 查询与语料向量都先做 L2 归一化，再取内积，
     取值 [-1, 1]，越大越相近；归一化可消除向量长度对打分的影响。
+    嵌入客户端由调用方传入并复用（Pipeline 只建一次）。
     """
-    query = np.asarray(build_embeddings(config).embed_query(text), dtype=np.float32)
+    query = np.asarray(embeddings.embed_query(text), dtype=np.float32)
     # 余弦相似度 = 归一化后的内积
     query /= np.linalg.norm(query)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -196,10 +203,11 @@ def main() -> None:
     load_env()
     config = load_config()
     chunks = load_chunks(config)
-    vectors = ensure_vectors(config, chunks)
+    embeddings = build_embeddings(config)
+    vectors = ensure_vectors(config, chunks, embeddings)
 
     print(f"查询: {DEMO_QUERY}")
-    print_hits(search(config, vectors, chunks, DEMO_QUERY, config.retrieval.top_n))
+    print_hits(search(embeddings, vectors, chunks, DEMO_QUERY, config.retrieval.top_n))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
 - 索引连同 corpus 落盘到 data/bm25-index/，检索时无需重新切块
 - 索引同时写入 meta.json（语料 sha256 + method/stopwords + 切块参数）；
   检索前校验，语料或参数变化时要求重建，避免配置静默失效
+- `load_index` 负责加载并校验，返回的 retriever 可复用（Pipeline 只加载一次）
 
 用法:
     uv run python -m fastrag.keyword_search build
@@ -77,7 +78,21 @@ def check_index(config: Config) -> None:
         )
 
 
+def load_index(config: Config) -> bm25s.BM25:
+    """加载 BM25 索引（含 corpus），加载前校验语料与构建参数。
+
+    返回的 retriever 可在进程内复用（Pipeline 只加载一次），避免每轮提问
+    都重读索引与整份 corpus；校验也只在加载时做一次。
+    """
+    index_dir = config.paths.bm25_index_dir
+    if not index_dir.exists():
+        raise SystemExit(f"索引不存在，请先运行: {REBUILD_HINT}")
+    check_index(config)
+    return bm25s.BM25.load(index_dir, load_corpus=True, show_progress=False)
+
+
 def search(
+    retriever: bm25s.BM25,
     config: Config,
     text: str,
     k: int,
@@ -85,16 +100,10 @@ def search(
 ) -> list[tuple[float, dict]]:
     """返回 top-k 命中 chunk 及其分数（降序）。
 
-    min_score 为 None 时取 config.bm25.min_score；只保留 score > min_score 的命中，
-    默认过滤掉零分文档，避免无关键词命中的 chunk 进入融合。
-    索引与语料/参数不一致时抛 SystemExit，提示重建。
+    retriever 由 `load_index` 提供，便于调用方复用；min_score 为 None 时取
+    config.bm25.min_score，只保留 score > min_score 的命中，默认过滤掉零分文档，
+    避免无关键词命中的 chunk 进入融合。
     """
-    index_dir = config.paths.bm25_index_dir
-    if not index_dir.exists():
-        raise SystemExit(f"索引不存在，请先运行: {REBUILD_HINT}")
-    check_index(config)
-
-    retriever = bm25s.BM25.load(index_dir, load_corpus=True, show_progress=False)
     query_tokens = bm25s.tokenize(
         text, stopwords=config.bm25.stopwords, show_progress=False
     )
@@ -126,7 +135,9 @@ def main() -> None:
         build_index(config)
         return
 
-    hits = search(config, args.text, args.k or config.retrieval.top_n)
+    hits = search(
+        load_index(config), config, args.text, args.k or config.retrieval.top_n
+    )
     for rank, (score, chunk) in enumerate(hits, start=1):
         print(f"{rank}. {score:.3f}  {chunk['source']}#{chunk['start']}-{chunk['end']}")
         print(f"   {format_snippet(chunk['text'])}")
