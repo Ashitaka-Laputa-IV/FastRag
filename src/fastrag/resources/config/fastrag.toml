@@ -52,6 +52,7 @@ model = "deepseek-ai/DeepSeek-V4.1-Flash"
 provider = "openai"  # init_chat_model 的 model_provider
 temperature = 0.7
 thinking = true
+retries = 1  # 路由模型失败后的重试次数
 
 [llm.answer]
 endpoint = "siliconflow"

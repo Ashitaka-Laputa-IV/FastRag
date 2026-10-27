@@ -149,9 +149,8 @@ def main() -> None:
         build_index(config)
         return
 
-    hits = search(
-        load_index(config), config, args.text, args.k or config.retrieval.top_n
-    )
+    k = config.retrieval.top_n if args.k is None else args.k
+    hits = search(load_index(config), config, args.text, k)
     for rank, (score, chunk) in enumerate(hits, start=1):
         print(f"{rank}. {score:.3f}  {chunk['source']}#{chunk['start']}-{chunk['end']}")
         print(f"   {format_snippet(chunk['text'])}")

@@ -85,6 +85,11 @@ def main() -> None:
 
     load_env()
     config = load_config()
+    n = max(config.retrieval.top_n if args.n is None else args.n, 0)
+    print(f"查询: {args.text}")
+    if n == 0:
+        return
+
     candidates = search_keywords(
         load_index(config), config, args.text, config.retrieval.bm25_candidates
     )
@@ -92,10 +97,7 @@ def main() -> None:
         build_reranker(config), args.text, [chunk for _, chunk in candidates]
     )
 
-    print(f"查询: {args.text}")
-    for rank, document in enumerate(
-        documents[: args.n or config.retrieval.top_n], start=1
-    ):
+    for rank, document in enumerate(documents[:n], start=1):
         metadata = document.metadata
         print(
             f"{rank}. {metadata['relevance_score']:.4f}  "
