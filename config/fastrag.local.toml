@@ -1,0 +1,74 @@
+# 全本地链路示例配置：嵌入用本地 bge-m3，检索规划与回答用本地 qwen3-4b-instruct。
+# 与 config/fastrag.toml 的区别只在模型、endpoint、维度与向量目录；
+# 语料、切块、BM25 索引与融合参数保持一致，便于与云端配置直接对比。
+#
+# 用法（不需要改默认配置）：
+#   export FASTRAG_CONFIG=config/fastrag.local.toml
+#   uv run python -m fastrag.prepare
+#   uv run python -m fastrag.rag_graph
+#
+# 本地服务通常不校验 key，所以 api_key_env 留空；客户端会自动用占位 key。
+# 若本机设置了 socks 代理，访问 127.0.0.1 需要 NO_PROXY=127.0.0.1,localhost。
+
+[paths]
+docs_dir = "data/langchain-docs"
+chunks_file = "data/chunks.jsonl"
+embeddings_dir = "data/embeddings-bge-m3"  # 与远程 2560 维向量分开存放
+bm25_index_dir = "data/bm25-index"
+
+[endpoints.local]
+base_url = "http://127.0.0.1:9938/v1"  # llama.cpp：qwen3-4b-instruct
+api_key_env = ""
+
+[endpoints.local_embed]
+base_url = "http://127.0.0.1:9931/v1"  # llama.cpp：bge-m3
+api_key_env = ""
+
+[chunking]
+tokenizer = "cl100k_base"
+chunk_size = 512
+chunk_overlap = 128
+include_delim = "prev"
+boilerplate_pattern = '\A> ## Documentation Index\n(?:>[^\n]*\n)+\n'
+
+[embedding]
+endpoint = "local_embed"
+model = "bge-m3"
+batch_size = 8     # 本地 llama.cpp 单请求 8 条吞吐最好
+dimensions = 1024  # bge-m3 dense 向量维度
+timeout = 300
+max_retries = 3
+
+[llm.route]
+endpoint = "local"
+model = "qwen3-4b-instruct"
+provider = "openai"
+temperature = 0.7
+thinking = false
+
+[llm.answer]
+endpoint = "local"
+model = "qwen3-4b-instruct"
+provider = "openai"
+temperature = 0.7
+thinking = false
+
+[reranker]
+endpoint = "local"  # fusion.method=rrf 时不会初始化；改用 rerank 需提供重排服务
+model = "bge-reranker"
+timeout = 60
+
+[bm25]
+stopwords = "english"
+method = "lucene"
+min_score = 0.0
+
+[retrieval]
+bm25_candidates = 20
+vector_candidates = 20
+top_n = 5
+
+[fusion]
+method = "rrf"
+rrf_k = 60
+weights = [1.1, 1.0]

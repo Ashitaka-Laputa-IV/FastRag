@@ -63,12 +63,17 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """单个 LLM 角色的模型参数。"""
+    """单个 LLM 角色的模型参数。
+
+    thinking 只对推理模型有意义：True 用厂家默认（通常开启），
+    False 时下发 enable_thinking=false 关掉思考，首 token 直接是回答正文。
+    """
 
     endpoint: EndpointConfig
     model: str
     provider: str
     temperature: float
+    thinking: bool = True
 
 
 @dataclass(frozen=True)
@@ -167,11 +172,25 @@ def _llm(
         model=role["model"],
         provider=role["provider"],
         temperature=role["temperature"],
+        thinking=role.get("thinking", True),
     )
 
 
-def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
-    """读取并校验统一配置。"""
+def load_config(path: pathlib.Path | None = None) -> Config:
+    """读取并校验统一配置。
+
+    默认读 config/fastrag.toml；设置环境变量 FASTRAG_CONFIG 可指向其他文件
+    （例如全本地的 config/fastrag.local.toml），不必覆盖默认配置。
+    """
+    if path is None:
+        override = os.environ.get("FASTRAG_CONFIG")
+        path = (
+            pathlib.Path(override).expanduser().resolve()
+            if override
+            else CONFIG_PATH
+        )
+    if not path.exists():
+        raise SystemExit(f"配置文件不存在: {path}")
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     paths = raw["paths"]
     endpoints = {

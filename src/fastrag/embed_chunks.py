@@ -3,7 +3,8 @@
 模型与接口由 config/fastrag.toml 的 [embedding]、[endpoints]、[paths] 指定，
 代码与具体模型无关。
 
-- API key 只从 .env / 环境变量读取
+- API key 只从 .env / 环境变量读取；endpoint 的 api_key_env 留空表示本地服务，
+  客户端用占位 key，不需要配置 key
 - 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口）
 - 输入是 chunk_docs 产出的 data/chunks.jsonl，输出 data/embeddings/ 下的
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
@@ -41,13 +42,19 @@ DEMO_QUERY = "human in the loop approval"
 
 
 def build_embeddings(config: Config) -> OpenAIEmbeddings:
-    """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。"""
+    """按配置建 OpenAI 兼容的 embeddings 客户端，缺 key 时给出明确提示。
+
+    endpoint 的 api_key_env 留空视为本地服务：SDK 要求非空 key，
+    这里用占位值 "local"。
+    """
     api_key = os.environ.get(config.embedding.endpoint.api_key_env)
     if not api_key:
-        raise SystemExit(
-            f"缺少 {config.embedding.endpoint.api_key_env}，"
-            "请先 cp .env.example .env 并填写"
-        )
+        if config.embedding.endpoint.api_key_env:
+            raise SystemExit(
+                f"缺少 {config.embedding.endpoint.api_key_env}，"
+                "请先 cp .env.example .env 并填写"
+            )
+        api_key = "local"
     return OpenAIEmbeddings(
         model=config.embedding.model,
         base_url=config.embedding.endpoint.base_url,
