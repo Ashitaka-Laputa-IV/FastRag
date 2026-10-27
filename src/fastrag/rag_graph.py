@@ -9,6 +9,7 @@
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
+- rerank 调用失败时自动降级为 RRF，保证一次外部服务故障不阻断回答
 - 不需要检索时 answer 节点改用 chat 提示词直接回答，不套「依据资料」的约束
 
 用法:
@@ -24,6 +25,7 @@
     回答: 依据资料，...（逐 token 输出）
 """
 
+import sys
 import warnings
 from functools import lru_cache
 from typing import TypedDict
@@ -151,25 +153,38 @@ class Pipeline:
         rerank 分支用改写后的英文 vector_query 做 cross-encoder 输入，
         与向量召回使用同一个查询，保证打分口径与召回一致；
         RRF 只看名次，两种方式都按 retrieval.top_n 截断。
+        重排服务不可用（超时、5xx、返回格式异常等）时降级为 RRF，
+        避免一次外部调用失败就让整轮问答失败。
         """
         bm25 = state.get("bm25", [])
         vector = state.get("vector", [])
         if not bm25 and not vector:
             return {"fused": []}
 
-        top_n = self.config.retrieval.top_n
         if self.config.fusion.method == "rerank":
             merged = self._merge(bm25, vector)
             query = state.get("vector_query") or state["question"]
-            documents = rerank_chunks(self.reranker, query, merged)
+            try:
+                documents = rerank_chunks(self.reranker, query, merged)
+            except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
+                print(
+                    f"重排失败（{type(exc).__name__}: {exc}），降级为 RRF",
+                    file=sys.stderr,
+                )
+                return {"fused": self._rrf(bm25, vector)}
+            top_n = self.config.retrieval.top_n
             return {
                 "fused": [self._to_chunk(document) for document in documents[:top_n]]
             }
 
+        return {"fused": self._rrf(bm25, vector)}
+
+    def _rrf(self, bm25: list[dict], vector: list[dict]) -> list[dict]:
+        """RRF 融合并按 retrieval.top_n 截断；rerank 失败时也走这里。"""
         fused = rrf_fuse(
             [bm25, vector], self.config.fusion.rrf_k, self.config.fusion.weights
         )
-        return {"fused": [chunk for _, chunk in fused][:top_n]}
+        return [chunk for _, chunk in fused][: self.config.retrieval.top_n]
 
     def answer(self, state: RAGState) -> dict:
         """按是否需要检索选择提示词，再让 LLM 作答。
