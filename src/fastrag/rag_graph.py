@@ -5,6 +5,8 @@
 
 - 流程图见 README.md
 - 提示词默认随包分发（fastrag.resources/prompts），可用 $FASTRAG_HOME/prompts 覆盖
+- 提示词与模型组成 Runnable 链（PromptTemplate | model | StrOutputParser），
+  plan_search / answer / chat 各一条，节点里只负责选链和准备输入
 - 参数统一见配置文件；判断检索与生成回答分别在
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
@@ -35,6 +37,8 @@ from functools import lru_cache
 from typing import TypedDict
 
 from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
@@ -95,12 +99,26 @@ class Pipeline:
     def __init__(self, config: Config):
         load_env()
         self.config = config
-        # 每个角色一条「主模型重试 -> 备用模型重试」链，节点里不再手写循环
-        self.plan_chain = self._model_chain(config.llm.route, SearchPlan)
-        self.answer_chain = self._model_chain(config.llm.answer)
         self.prompts = {
             name: load_prompt(name) for name in ("search_plan", "answer", "chat")
         }
+        # 提示词 + 模型链：每个角色一条「主模型重试 -> 备用模型重试」链，
+        # 节点里不再手写格式化与重试循环。answer/chat 共用同一条模型链。
+        answer_model = self._model_chain(config.llm.answer)
+        self.plan_chain = (
+            PromptTemplate.from_template(self.prompts["search_plan"])
+            | self._model_chain(config.llm.route, SearchPlan)
+        )
+        self.answer_chain = (
+            PromptTemplate.from_template(self.prompts["answer"])
+            | answer_model
+            | StrOutputParser()
+        )
+        self.chat_chain = (
+            PromptTemplate.from_template(self.prompts["chat"])
+            | answer_model
+            | StrOutputParser()
+        )
         self.chunks = load_chunks(config)
         self.embeddings = build_embeddings(config)
         self.vectors = ensure_vectors(config, self.chunks, self.embeddings)
@@ -146,9 +164,8 @@ class Pipeline:
         路由模型的重试与备用模型由 `_model_chain` 统一组装；主/备都失败时
         用原始问题继续检索，避免把路由故障误判成「不需要检索」。
         """
-        prompt = self.prompts["search_plan"].format(question=state["question"])
         try:
-            plan = self.plan_chain.invoke(prompt)
+            plan = self.plan_chain.invoke({"question": state["question"]})
         except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
             # 路由不可用时用原始问题继续检索：比跳过检索更符合 RAG 语义，
             # 避免把「路由故障」误当成「不需要检索」而诱导模型凭空作答。
@@ -233,7 +250,7 @@ class Pipeline:
         return [chunk for _, chunk in fused][: self.config.retrieval.top_n]
 
     def answer(self, state: RAGState) -> dict:
-        """按是否需要检索选择提示词，再让 LLM 作答。
+        """按是否需要检索选择提示词链，再让 LLM 作答。
 
         需要检索时把片段拼进 answer 模板，要求只依据资料；
         不需要检索时没有资料可依据，改用 chat 模板直接回答，
@@ -248,21 +265,21 @@ class Pipeline:
                 )
                 or "（无检索结果）"
             )
-            prompt = self.prompts["answer"].format(
-                context=context, question=state["question"]
-            )
+            chain = self.answer_chain
+            inputs = {"context": context, "question": state["question"]}
         else:
-            prompt = self.prompts["chat"].format(question=state["question"])
-        return {"answer": self._answer_text(prompt)}
+            chain = self.chat_chain
+            inputs = {"question": state["question"]}
+        return {"answer": self._answer_text(chain, inputs)}
 
-    def _answer_text(self, prompt: str) -> str:
-        """调用回答链（主模型重试 -> 备用模型重试）；全部失败返回空字符串。
+    def _answer_text(self, chain: Runnable, inputs: dict) -> str:
+        """调用提示词/模型/解析链（主模型重试 -> 备用模型重试）。
 
         重试次数与备用模型都来自 `[llm.answer]`；外部 LLM 偶发超时/5xx
-        不应终止整个交互循环。
+        不应终止整个交互循环，全部失败返回空字符串。
         """
         try:
-            return self.answer_chain.invoke(prompt).text.strip()
+            return chain.invoke(inputs).strip()
         except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
             print(
                 f"回答生成失败（{type(exc).__name__}: {exc}），本轮没有回答",
