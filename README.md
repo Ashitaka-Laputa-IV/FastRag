@@ -1,6 +1,18 @@
 # FastRag
 Fast Rag
 
+## 构建数据
+
+一条命令刷新全部产物（切块 → 向量 → BM25 索引）：
+
+```bash
+uv run python -m fastrag.prepare
+```
+
+三份产物用 `chunks.jsonl` 的 sha256 互相校验：语料变化后向量会自动重建；
+BM25 索引检测到语料或 `[bm25]` 参数变化时会报错并要求重建，
+`prepare` 会把三步一起跑完，避免手工漏步。
+
 ## 配置
 
 所有参数集中在 `config/fastrag.toml`：`[paths]`、`[endpoints.*]`、`[chunking]`、

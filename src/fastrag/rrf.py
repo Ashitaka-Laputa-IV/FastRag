@@ -23,12 +23,9 @@
 import argparse
 from typing import Sequence
 
+from fastrag.chunks import load_chunks
 from fastrag.config import load_config, load_env
-from fastrag.embed_chunks import (
-    ensure_vectors,
-    load_chunks,
-    search as search_vectors,
-)
+from fastrag.embed_chunks import ensure_vectors, search as search_vectors
 from fastrag.keyword_search import (
     format_snippet,
     search as search_keywords,
