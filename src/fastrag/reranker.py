@@ -92,10 +92,9 @@ def main() -> None:
         build_reranker(config), args.text, [chunk for _, chunk in candidates]
     )
 
+    n = config.retrieval.top_n if args.n is None else args.n
     print(f"查询: {args.text}")
-    for rank, document in enumerate(
-        documents[: args.n or config.retrieval.top_n], start=1
-    ):
+    for rank, document in enumerate(documents[:n], start=1):
         metadata = document.metadata
         print(
             f"{rank}. {metadata['relevance_score']:.4f}  "

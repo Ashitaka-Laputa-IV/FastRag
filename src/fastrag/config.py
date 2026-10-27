@@ -22,6 +22,40 @@ from fastrag.errors import FastragError
 
 PACKAGE_RESOURCES = importlib.resources.files("fastrag.resources")
 FUSION_METHODS = ("rrf", "rerank")
+BM25_METHODS = ("lucene", "robertson", "atire", "bm25l", "bm25+")
+# 与 bm25s._infer_stopwords 支持的语言名/别名保持一致
+BM25_STOPWORDS = (
+    "english",
+    "en",
+    "english_plus",
+    "en_plus",
+    "german",
+    "de",
+    "dutch",
+    "nl",
+    "french",
+    "fr",
+    "spanish",
+    "es",
+    "portuguese",
+    "pt",
+    "italian",
+    "it",
+    "russian",
+    "ru",
+    "swedish",
+    "sv",
+    "norwegian",
+    "no",
+    "chinese",
+    "zh",
+    "turkish",
+    "tr",
+    "korean",
+    "ko",
+    "danish",
+    "da",
+)
 
 # editable 安装时 __file__ 位于 <repo>/src/fastrag/，据此识别源码树；
 # 装成 wheel 后这里指向 site-packages，不再是项目根目录。
@@ -184,6 +218,29 @@ class Config:
     fusion: FusionConfig
 
 
+def _env_value(raw: str) -> str:
+    """解析 `.env` 的取值：去掉行尾注释，再去掉一层成对引号。
+
+    - `KEY=value  # 注释` -> `value`
+    - `KEY="a # b"` -> `a # b`（引号内的 # 不当注释）
+    - `KEY='x'` -> `x`（只剥一层，不会误删值里的引号）
+    """
+    quote = ""
+    for index, char in enumerate(raw):
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (index == 0 or raw[index - 1].isspace()):
+            raw = raw[:index]
+            break
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    return value
+
+
 def load_env(path: pathlib.Path | None = None) -> None:
     """把 .env 里的键值写进环境变量（不覆盖已存在的值），默认读工作目录。"""
     path = home() / ".env" if path is None else path
@@ -194,7 +251,7 @@ def load_env(path: pathlib.Path | None = None) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+        os.environ.setdefault(key.strip(), _env_value(value))
 
 
 def _resolve(path: str) -> pathlib.Path:
@@ -244,12 +301,26 @@ def _number(owner: str, value: object) -> float:
     return value
 
 
+def _validate_llm_role(role: dict, name: str) -> None:
+    """校验一个 LLM 角色（含递归的 fallback）的温度等参数。"""
+    temperature = _number(f"llm.{name}.temperature", role["temperature"])
+    if not 0 <= temperature <= 2:
+        raise FastragError(
+            f"llm.{name}.temperature 必须在 0~2 之间，当前为 {temperature!r}"
+        )
+    fallback = role.get("fallback")
+    if fallback:
+        _validate_llm_role(fallback, f"{name}.fallback")
+
+
 def _validate(
     chunking: dict,
     embedding: dict,
     bm25: dict,
     retrieval: dict,
     fusion: dict,
+    llm: dict,
+    reranker: dict,
 ) -> str:
     """集中校验数值、枚举与正则参数，返回 boilerplate_pattern。
 
@@ -309,6 +380,30 @@ def _validate(
         )
 
     _number("bm25.min_score", bm25["min_score"])
+    if bm25["method"] not in BM25_METHODS:
+        raise FastragError(
+            f"bm25.method 必须是 {' / '.join(BM25_METHODS)} 之一，"
+            f"当前为 {bm25['method']!r}"
+        )
+    stopwords = bm25["stopwords"]
+    if isinstance(stopwords, list):
+        if not all(isinstance(word, str) for word in stopwords):
+            raise FastragError(
+                f"bm25.stopwords 列表元素必须是字符串，当前为 {stopwords!r}"
+            )
+    elif not isinstance(stopwords, str) or stopwords not in BM25_STOPWORDS:
+        raise FastragError(
+            f"bm25.stopwords 必须是内置语言名或字符串列表，当前为 {stopwords!r}"
+        )
+
+    reranker_timeout = _number("reranker.timeout", reranker["timeout"])
+    if reranker_timeout <= 0:
+        raise FastragError(
+            f"reranker.timeout 必须大于 0，当前为 {reranker_timeout!r}"
+        )
+
+    _validate_llm_role(llm["route"], "route")
+    _validate_llm_role(llm["answer"], "answer")
 
     pattern = chunking.get("boilerplate_pattern", "")
     if pattern:
@@ -352,7 +447,9 @@ def load_config(path: pathlib.Path | None = None) -> Config:
     llm, reranker = raw["llm"], raw["reranker"]
     bm25, retrieval, fusion = raw["bm25"], raw["retrieval"], raw["fusion"]
 
-    pattern = _validate(chunking, embedding, bm25, retrieval, fusion)
+    pattern = _validate(
+        chunking, embedding, bm25, retrieval, fusion, llm, reranker
+    )
 
     return Config(
         paths=Paths(

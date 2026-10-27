@@ -89,10 +89,9 @@ def main() -> None:
         {chunk["id"]: rank for rank, chunk in enumerate(ranking, start=1)}
         for ranking in rankings
     ]
+    n = config.retrieval.top_n if args.n is None else args.n
     print(f"查询: {args.text}")
-    for rank, (score, chunk) in enumerate(
-        fused[: args.n or config.retrieval.top_n], start=1
-    ):
+    for rank, (score, chunk) in enumerate(fused[:n], start=1):
         positions = " / ".join(
             f"{name} #{rank_map[chunk['id']]}" if chunk["id"] in rank_map else f"{name} -"
             for name, rank_map in zip(names, ranks)
