@@ -52,7 +52,12 @@ def chunks_sha256(path: pathlib.Path) -> str:
 
 
 def chunking_params(config: Config) -> dict:
-    """记录影响 chunk 内容的切块参数，随下游元信息一起落盘。"""
+    """记录影响 chunk 内容的切块参数，随下游元信息一起落盘。
+
+    仅作排查用的快照，**不参与**向量/索引的复用与校验判断：
+    `chunks.jsonl` 的全字节 sha256 已经覆盖了切块结果，改切块参数但没重切块时，
+    旧向量/索引与现有语料仍然一致，继续复用是正确的。
+    """
     chunking = config.chunking
     return {
         "tokenizer": chunking.tokenizer,

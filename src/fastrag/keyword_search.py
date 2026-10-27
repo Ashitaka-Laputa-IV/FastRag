@@ -4,7 +4,7 @@
 - 语料是 chunk_docs 产出的 data/chunks.jsonl（每行含 id/source/start/end/token_count/text）
 - 索引连同 corpus 落盘到 data/bm25-index/，检索时无需重新切块
 - 索引同时写入 meta.json（语料 sha256 + method/stopwords + 切块参数）；
-  检索前校验，语料或参数变化时要求重建，避免配置静默失效
+  检索前校验语料与 method/stopwords，不一致时要求重建；切块参数仅作记录
 - `load_index` 负责加载并校验，返回的 retriever 可复用（Pipeline 只加载一次）
 
 用法:
@@ -60,7 +60,11 @@ def build_index(config: Config) -> None:
 
 
 def check_index(config: Config) -> None:
-    """校验索引与当前语料、BM25 参数一致；不一致时要求重建而不是静默使用。"""
+    """校验索引与当前语料、BM25 参数一致；不一致时要求重建而不是静默使用。
+
+    meta.json 里的 `chunking` 只作记录，不参与比较：语料指纹一致时，
+    只改切块参数而没有重切块，旧索引与现有语料仍然匹配。
+    """
     meta_path = config.paths.bm25_index_dir / "meta.json"
     if not meta_path.exists():
         raise FastragError(
@@ -106,13 +110,20 @@ def search(
     retriever 由 `load_index` 提供，便于调用方复用；min_score 为 None 时取
     config.bm25.min_score，只保留 score > min_score 的命中，默认过滤掉零分文档，
     避免无关键词命中的 chunk 进入融合。
+
+    空语料或 k <= 0 时直接返回空列表：bm25s 对空 corpus 会返回形状为
+    (1, 0) 的结果，继续取 `results[0]` 只会得到索引错误。
     """
+    if not retriever.corpus or k <= 0:
+        return []
     query_tokens = bm25s.tokenize(
         text, stopwords=config.bm25.stopwords, show_progress=False
     )
     results, scores = retriever.retrieve(
         query_tokens, k=min(k, len(retriever.corpus)), show_progress=False
     )
+    if results.size == 0:
+        return []
     threshold = config.bm25.min_score if min_score is None else min_score
     hits = [(float(score), chunk) for score, chunk in zip(scores[0], results[0])]
     return [hit for hit in hits if hit[0] > threshold]

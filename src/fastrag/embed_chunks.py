@@ -10,6 +10,7 @@
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
 - 已嵌入且模型与 chunks.jsonl 内容指纹未变时直接复用 vectors.npy，不重复请求接口；
   manifest.json 记录语料 sha256 与切块参数，条数相同但内容变化也能识别
+  （切块参数仅便于排查，不参与复用判断）
 - 运行结束用固定问题检索一次（余弦相似度），默认返回 retrieval.top_n 条
 
 用法:
@@ -109,6 +110,7 @@ def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> Non
         "count": int(vectors.shape[0]),
         "chunks_file": display_path(config.paths.chunks_file),
         "chunks_sha256": chunks_sha256(config.paths.chunks_file),
+        # chunking 只用于排查，不参与复用判断；语料一致性由上面的指纹保证
         "chunking": chunking_params(config),
         "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
     }
@@ -177,7 +179,11 @@ def search(
     度量：余弦相似度 —— 查询与语料向量都先做 L2 归一化，再取内积，
     取值 [-1, 1]，越大越相近；归一化可消除向量长度对打分的影响。
     嵌入客户端由调用方传入并复用（Pipeline 只建一次）。
+
+    空语料或 k <= 0 时直接返回空列表，连查询向量都不请求。
     """
+    if not chunks or vectors.shape[0] == 0 or k <= 0:
+        return []
     query = np.asarray(embeddings.embed_query(text), dtype=np.float32)
     # 余弦相似度 = 归一化后的内积
     query /= np.linalg.norm(query)
