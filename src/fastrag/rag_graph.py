@@ -10,6 +10,8 @@
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
 - rerank 调用失败时自动降级为 RRF，保证一次外部服务故障不阻断回答
+- answer 按 [llm.answer].retries 重试，耗尽后改用 [llm.answer.fallback] 备用模型；
+  全部失败时打印提示并继续交互，不退出整个 ask 循环
 - 不需要检索时 answer 节点改用 chat 提示词直接回答，不套「依据资料」的约束
 
 用法:
@@ -36,7 +38,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from fastrag.chunks import load_chunks
-from fastrag.config import Config, load_config, load_env, prompt_path
+from fastrag.config import Config, LLMConfig, load_config, load_env, prompt_path
 from fastrag.embed_chunks import (
     build_embeddings,
     ensure_vectors,
@@ -47,7 +49,6 @@ from fastrag.keyword_search import load_index, search as search_keywords
 from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
-
 
 
 class RAGState(TypedDict, total=False):
@@ -94,6 +95,11 @@ class Pipeline:
         self.config = config
         self.route_llm: BaseChatModel = build_llm(config.llm.route)
         self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
+        self.fallback_llm: BaseChatModel | None = (
+            build_llm(config.llm.answer.fallback)
+            if config.llm.answer.fallback
+            else None
+        )
         self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
         self.prompts = {
             name: load_prompt(name) for name in ("search_plan", "answer", "chat")
@@ -207,7 +213,56 @@ class Pipeline:
             )
         else:
             prompt = self.prompts["chat"].format(question=state["question"])
-        return {"answer": self.answer_llm.invoke(prompt).text.strip()}
+        return {"answer": self._answer_text(prompt)}
+
+    def _answer_text(self, prompt: str) -> str:
+        """主模型按配置重试，重试耗尽后改用备用模型；全部失败返回空字符串。
+
+        次数与备用模型都来自 `[llm.answer]` 的 `retries` / `[llm.answer.fallback]`；
+        外部 LLM 偶发超时/5xx 不应终止整个交互循环。
+        """
+        config = self.config.llm.answer
+        text = self._invoke_with_retries(self.answer_llm, config, prompt, "回答模型")
+        if text is not None:
+            return text
+
+        fallback = config.fallback
+        if fallback is None or self.fallback_llm is None:
+            print("未配置备用模型，本轮没有回答", file=sys.stderr)
+            return ""
+        text = self._invoke_with_retries(
+            self.fallback_llm, fallback, prompt, "备用模型"
+        )
+        if text is not None:
+            return text
+        print("备用模型也失败，本轮没有回答", file=sys.stderr)
+        return ""
+
+    @staticmethod
+    def _invoke_with_retries(
+        llm: BaseChatModel,
+        config: LLMConfig,
+        prompt: str,
+        label: str,
+    ) -> str | None:
+        """按 config.retries 重试调用；成功返回文本，重试耗尽返回 None。"""
+        attempts = 1 + config.retries
+        for attempt in range(attempts):
+            try:
+                return llm.invoke(prompt).text.strip()
+            except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
+                if attempt < attempts - 1:
+                    print(
+                        f"{label}生成失败（{type(exc).__name__}: {exc}），"
+                        f"重试 {attempt + 1}/{attempts - 1} ...",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"{label}生成失败（{type(exc).__name__}: {exc}）",
+                        file=sys.stderr,
+                    )
+        return None
 
     @staticmethod
     def _merge(*rankings: list[dict]) -> list[dict]:
@@ -286,16 +341,33 @@ def main() -> None:
         if not question:
             break
 
-        run = graph.stream_events({"question": question}, version="v3")
-        print("回答: ", end="", flush=True)
-        for stream in run.messages:
-            if stream.node != "answer":
-                continue
-            for delta in stream.text:
-                print(delta, end="", flush=True)
-        print()
+        try:
+            run = graph.stream_events({"question": question}, version="v3")
+            print("回答: ", end="", flush=True)
+            printed = False
+            for stream in run.messages:
+                if stream.node != "answer":
+                    continue
+                for delta in stream.text:
+                    printed = True
+                    print(delta, end="", flush=True)
+            print()
+            state = run.output or {}
+        except KeyboardInterrupt:
+            print()
+            break
+        except Exception as exc:  # noqa: BLE001 - 单轮外部故障不应终止交互
+            print()
+            print(
+                f"本轮问答失败（{type(exc).__name__}: {exc}），"
+                "可以重新提问或回车退出",
+                file=sys.stderr,
+            )
+            continue
 
-        state = run.output or {}
+        if not printed:
+            # answer 节点重试后仍失败（或图没有流式输出），给出明确提示
+            print(state.get("answer") or "（本轮没有生成回答）")
         if state.get("need_search"):
             print(f"BM25 查询: {state.get('bm25_query', '')}")
             print(f"向量查询: {state.get('vector_query', '')}")

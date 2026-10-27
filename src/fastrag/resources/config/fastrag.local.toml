@@ -53,6 +53,8 @@ model = "qwen3-4b-instruct"
 provider = "openai"
 temperature = 0.7
 thinking = false
+retries = 1  # 主模型失败后的重试次数
+# 需要备用模型时，追加 [llm.answer.fallback] 并指向另一个 endpoint（见包内默认配置）。
 
 [reranker]
 endpoint = "local"  # fusion.method=rrf 时不会初始化；改用 rerank 需提供重排服务
