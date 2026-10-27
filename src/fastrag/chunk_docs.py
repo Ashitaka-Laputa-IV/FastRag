@@ -27,13 +27,14 @@ import tiktoken
 from chonkie import SentenceChunker
 
 from fastrag.config import ROOT, Config, load_config
+from fastrag.errors import FastragError, run_cli
 
 
 def iter_docs(config: Config) -> list[pathlib.Path]:
     """返回待切分的 markdown 文档（按路径排序，保证输出稳定）。"""
     docs_dir = config.paths.docs_dir
     if not docs_dir.is_dir():
-        raise SystemExit(
+        raise FastragError(
             f"文档目录不存在: {docs_dir}\n"
             "请先运行: uv run python -m fastrag.download_example_docs"
         )
@@ -117,4 +118,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

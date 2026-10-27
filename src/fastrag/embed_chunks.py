@@ -36,6 +36,7 @@ from langchain_openai import OpenAIEmbeddings
 
 from fastrag.chunks import chunking_params, chunks_sha256, load_chunks
 from fastrag.config import ROOT, Config, load_config, load_env
+from fastrag.errors import FastragError, run_cli
 
 SNIPPET_CHARS = 160
 DEMO_QUERY = "human in the loop approval"
@@ -50,7 +51,7 @@ def build_embeddings(config: Config) -> OpenAIEmbeddings:
     api_key = os.environ.get(config.embedding.endpoint.api_key_env)
     if not api_key:
         if config.embedding.endpoint.api_key_env:
-            raise SystemExit(
+            raise FastragError(
                 f"缺少 {config.embedding.endpoint.api_key_env}，"
                 "请先 cp .env.example .env 并填写"
             )
@@ -80,7 +81,7 @@ def embed_chunks(
         batch = chunks[start : start + batch_size]
         batch_vectors = embeddings.embed_documents([chunk["text"] for chunk in batch])
         if len(batch_vectors[0]) != dimensions:
-            raise SystemExit(
+            raise FastragError(
                 f"返回维度 {len(batch_vectors[0])} 与配置 dimensions={dimensions} 不一致"
             )
         vectors[start : start + len(batch)] = batch_vectors
@@ -96,7 +97,7 @@ def embed_chunks(
 def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> None:
     """落盘向量矩阵与元信息（含语料指纹，便于下次校验行序是否仍对齐）。"""
     if vectors.shape[0] != len(chunks):
-        raise SystemExit(
+        raise FastragError(
             f"向量条数 {vectors.shape[0]} 与 chunk 条数 {len(chunks)} 不一致，拒绝落盘"
         )
     out_dir = config.paths.embeddings_dir
@@ -211,4 +212,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -18,6 +18,7 @@ import time
 import urllib.request
 
 from fastrag.config import load_config
+from fastrag.errors import run_cli
 
 INDEX_URL = (
     "https://docs.langchain.com/_llms/agent-development-lifecycle/build/python.txt"
@@ -96,4 +97,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

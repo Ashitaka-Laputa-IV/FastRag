@@ -21,6 +21,7 @@ import bm25s
 
 from fastrag.chunks import chunking_params, chunks_sha256, load_chunks
 from fastrag.config import Config, load_config
+from fastrag.errors import FastragError, run_cli
 
 SNIPPET_CHARS = 160
 REBUILD_HINT = "uv run python -m fastrag.keyword_search build"
@@ -62,17 +63,17 @@ def check_index(config: Config) -> None:
     """校验索引与当前语料、BM25 参数一致；不一致时要求重建而不是静默使用。"""
     meta_path = config.paths.bm25_index_dir / "meta.json"
     if not meta_path.exists():
-        raise SystemExit(
+        raise FastragError(
             f"BM25 索引缺少 meta.json（旧版索引无法校验），请重新运行: {REBUILD_HINT}"
         )
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     if meta.get("chunks_sha256") != chunks_sha256(config.paths.chunks_file):
-        raise SystemExit(
+        raise FastragError(
             f"chunks.jsonl 已变更，BM25 索引与语料不一致，请重新运行: {REBUILD_HINT}"
         )
     params = index_params(config)
     if meta.get("bm25") != params:
-        raise SystemExit(
+        raise FastragError(
             f"bm25 参数已变更（索引: {meta.get('bm25')}，当前: {params}），"
             f"请重新运行: {REBUILD_HINT}"
         )
@@ -86,7 +87,9 @@ def load_index(config: Config) -> bm25s.BM25:
     """
     index_dir = config.paths.bm25_index_dir
     if not index_dir.exists():
-        raise SystemExit(f"索引不存在，请先运行: {REBUILD_HINT}")
+        raise FastragError(
+            f"索引不存在，请先运行: {REBUILD_HINT}"
+        )
     check_index(config)
     return bm25s.BM25.load(index_dir, load_corpus=True, show_progress=False)
 
@@ -144,4 +147,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

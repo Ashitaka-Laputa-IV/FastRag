@@ -26,6 +26,7 @@ from typing import Sequence
 from fastrag.chunks import load_chunks
 from fastrag.config import load_config, load_env
 from fastrag.embed_chunks import build_embeddings, ensure_vectors, search as search_vectors
+from fastrag.errors import run_cli
 from fastrag.keyword_search import (
     format_snippet,
     load_index,
@@ -104,4 +105,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

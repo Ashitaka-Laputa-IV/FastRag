@@ -25,6 +25,7 @@ from langchain_core.documents import BaseDocumentCompressor, Document
 from langchain_reranker.rerankers import init_reranker
 
 from fastrag.config import Config, load_config, load_env
+from fastrag.errors import FastragError, run_cli
 
 
 def build_reranker(config: Config) -> BaseDocumentCompressor:
@@ -35,7 +36,7 @@ def build_reranker(config: Config) -> BaseDocumentCompressor:
     api_key = os.environ.get(config.reranker.endpoint.api_key_env)
     if not api_key:
         if config.reranker.endpoint.api_key_env:
-            raise SystemExit(
+            raise FastragError(
                 f"缺少 {config.reranker.endpoint.api_key_env}，"
                 "请先 cp .env.example .env 并填写"
             )
@@ -105,4 +106,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

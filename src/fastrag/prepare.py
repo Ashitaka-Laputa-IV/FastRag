@@ -28,6 +28,7 @@ from fastrag import chunk_docs
 from fastrag.chunks import load_chunks
 from fastrag.config import load_config, load_env
 from fastrag.embed_chunks import ensure_vectors
+from fastrag.errors import run_cli
 from fastrag.keyword_search import build_index
 
 
@@ -50,4 +51,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -14,6 +14,8 @@ import re
 import tomllib
 from dataclasses import dataclass
 
+from fastrag.errors import FastragError
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "fastrag.toml"
 ENV_PATH = ROOT / ".env"
@@ -159,7 +161,9 @@ def _endpoint(
     try:
         return endpoints[name]
     except KeyError:
-        raise SystemExit(f"{owner}.endpoint = {name!r} 未在 [endpoints] 中定义") from None
+        raise FastragError(
+            f"{owner}.endpoint = {name!r} 未在 [endpoints] 中定义"
+        ) from None
 
 
 def _llm(
@@ -190,7 +194,7 @@ def load_config(path: pathlib.Path | None = None) -> Config:
             else CONFIG_PATH
         )
     if not path.exists():
-        raise SystemExit(f"配置文件不存在: {path}")
+        raise FastragError(f"配置文件不存在: {path}")
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     paths = raw["paths"]
     endpoints = {
@@ -205,18 +209,18 @@ def load_config(path: pathlib.Path | None = None) -> Config:
     bm25, retrieval, fusion = raw["bm25"], raw["retrieval"], raw["fusion"]
 
     if fusion["method"] not in FUSION_METHODS:
-        raise SystemExit(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
+        raise FastragError(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
     if len(fusion["weights"]) != 2:
-        raise SystemExit("fusion.weights 必须包含两路权重（BM25、向量）")
+        raise FastragError("fusion.weights 必须包含两路权重（BM25、向量）")
     for key in ("bm25_candidates", "vector_candidates", "top_n"):
         if retrieval[key] < 1:
-            raise SystemExit(f"retrieval.{key} 必须大于 0")
+            raise FastragError(f"retrieval.{key} 必须大于 0")
     pattern = chunking.get("boilerplate_pattern", "")
     if pattern:
         try:
             re.compile(pattern)
         except re.error as exc:
-            raise SystemExit(
+            raise FastragError(
                 f"chunking.boilerplate_pattern 不是合法正则: {exc}"
             ) from None
 
