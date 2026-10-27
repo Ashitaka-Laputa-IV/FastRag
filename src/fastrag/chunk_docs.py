@@ -7,8 +7,9 @@
   块长与真实 token 数存在偏差
 - overlap：SentenceChunker 原生支持 chunk_overlap，默认 128 token（约 25%）；
   重叠量按句子边界取整，句边界大于目标值时可能不足 128 token
-- 模板头：示例文档开头的 `> ## Documentation Index` 导航块不进入正文，
-  偏移仍按原文记录，`text == 原文[start:end]` 不受影响
+- 模板头：`[chunking].boilerplate_pattern` 给出一条从文档开头剥离的模板头正则
+  （默认匹配示例语料的导航块，留空表示不剥离）；偏移仍按原文记录，
+  `text == 原文[start:end]` 不受影响
 - 元信息：source（相对仓库根目录的文档路径）、start / end（文档内字符偏移）、
   token_count（token 数）
 
@@ -27,10 +28,6 @@ from chonkie import SentenceChunker
 
 from fastrag.config import ROOT, Config, load_config
 
-# 示例文档由 docs.langchain.com 导出，开头是站点导航块（引用行 + 空行）。
-# 只匹配文档开头，避免误伤正文里的引用块。
-BOILERPLATE_RE = re.compile(r"\A> ## Documentation Index\n(?:>[^\n]*\n)+\n")
-
 
 def iter_docs(config: Config) -> list[pathlib.Path]:
     """返回待切分的 markdown 文档（按路径排序，保证输出稳定）。"""
@@ -43,13 +40,17 @@ def iter_docs(config: Config) -> list[pathlib.Path]:
     return sorted(docs_dir.rglob("*.md"))
 
 
-def strip_boilerplate(text: str) -> tuple[str, int]:
+def strip_boilerplate(
+    text: str, pattern: re.Pattern[str] | None
+) -> tuple[str, int]:
     """去掉文档开头的站点模板头，返回（正文, 前缀字符数）。
 
-    前缀长度会加回 chunk 偏移，因此 `text == 原文[start:end]` 依然成立；
-    没有模板头的文档原样返回，前缀为 0。
+    模板头正则来自 `[chunking].boilerplate_pattern`，pattern 为 None 时原样返回。
+    前缀长度会加回 chunk 偏移，因此 `text == 原文[start:end]` 依然成立。
     """
-    match = BOILERPLATE_RE.match(text)
+    if pattern is None:
+        return text, 0
+    match = pattern.match(text)
     if match is None:
         return text, 0
     return text[match.end() :], match.end()
@@ -64,11 +65,18 @@ def build_records(config: Config) -> list[dict]:
         chunk_overlap=config.chunking.chunk_overlap,
         include_delim=config.chunking.include_delim,
     )
+    pattern = (
+        re.compile(config.chunking.boilerplate_pattern)
+        if config.chunking.boilerplate_pattern
+        else None
+    )
 
     records = []
     for path in iter_docs(config):
         source = path.relative_to(ROOT).as_posix()
-        text, offset = strip_boilerplate(path.read_text(encoding="utf-8"))
+        text, offset = strip_boilerplate(
+            path.read_text(encoding="utf-8"), pattern
+        )
         if not text.strip():
             continue
         for chunk in chunker.chunk(text):

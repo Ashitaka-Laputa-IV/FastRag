@@ -10,6 +10,7 @@
 
 import os
 import pathlib
+import re
 import tomllib
 from dataclasses import dataclass
 
@@ -45,6 +46,7 @@ class ChunkingConfig:
     chunk_size: int
     chunk_overlap: int
     include_delim: str
+    boilerplate_pattern: str
 
 
 @dataclass(frozen=True)
@@ -190,6 +192,14 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
     for key in ("bm25_candidates", "vector_candidates", "top_n"):
         if retrieval[key] < 1:
             raise SystemExit(f"retrieval.{key} 必须大于 0")
+    pattern = chunking.get("boilerplate_pattern", "")
+    if pattern:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise SystemExit(
+                f"chunking.boilerplate_pattern 不是合法正则: {exc}"
+            ) from None
 
     return Config(
         paths=Paths(
@@ -204,6 +214,7 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> Config:
             chunk_size=chunking["chunk_size"],
             chunk_overlap=chunking["chunk_overlap"],
             include_delim=chunking["include_delim"],
+            boilerplate_pattern=pattern,
         ),
         embedding=EmbeddingConfig(
             endpoint=_endpoint(endpoints, embedding["endpoint"], "embedding"),
