@@ -28,13 +28,18 @@ from fastrag.config import Config, load_config, load_env
 
 
 def build_reranker(config: Config) -> BaseDocumentCompressor:
-    """按配置创建重排器，缺 key 时给出明确提示。"""
+    """按配置创建重排器，缺 key 时给出明确提示。
+
+    endpoint 的 api_key_env 留空视为本地服务，此时用占位 key。
+    """
     api_key = os.environ.get(config.reranker.endpoint.api_key_env)
     if not api_key:
-        raise SystemExit(
-            f"缺少 {config.reranker.endpoint.api_key_env}，"
-            "请先 cp .env.example .env 并填写"
-        )
+        if config.reranker.endpoint.api_key_env:
+            raise SystemExit(
+                f"缺少 {config.reranker.endpoint.api_key_env}，"
+                "请先 cp .env.example .env 并填写"
+            )
+        api_key = "local"
     return init_reranker(
         f"custom:{config.reranker.model}",
         base_url=config.reranker.endpoint.base_url,
