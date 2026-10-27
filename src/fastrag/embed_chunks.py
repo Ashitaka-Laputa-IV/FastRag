@@ -7,7 +7,8 @@
 - 嵌入走 langchain 的 OpenAIEmbeddings（OpenAI 兼容接口）
 - 输入是 chunk_docs 产出的 data/chunks.jsonl，输出 data/embeddings/ 下的
   vectors.npy（按 chunks.jsonl 行序排列的 float32 矩阵）与 manifest.json
-- 已嵌入且模型/语料未变时直接复用 vectors.npy，不重复请求接口
+- 已嵌入且模型与 chunks.jsonl 内容指纹未变时直接复用 vectors.npy，不重复请求接口；
+  manifest.json 记录语料 sha256 与切块参数，条数相同但内容变化也能识别
 - 运行结束用固定问题检索一次（余弦相似度），默认返回 retrieval.top_n 条
 
 用法:
@@ -32,16 +33,11 @@ import time
 import numpy as np
 from langchain_openai import OpenAIEmbeddings
 
+from fastrag.chunks import chunking_params, chunks_sha256, load_chunks
 from fastrag.config import ROOT, Config, load_config, load_env
 
 SNIPPET_CHARS = 160
 DEMO_QUERY = "human in the loop approval"
-
-
-def load_chunks(config: Config) -> list[dict]:
-    """读取 JSONL 形式的 chunk 语料。"""
-    with config.paths.chunks_file.open(encoding="utf-8") as fh:
-        return [json.loads(line) for line in fh if line.strip()]
 
 
 def build_embeddings(config: Config) -> OpenAIEmbeddings:
@@ -90,8 +86,12 @@ def embed_chunks(
     return vectors
 
 
-def save_vectors(config: Config, vectors: np.ndarray) -> None:
-    """落盘向量矩阵与元信息（对齐 chunks.jsonl 行序）。"""
+def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> None:
+    """落盘向量矩阵与元信息（含语料指纹，便于下次校验行序是否仍对齐）。"""
+    if vectors.shape[0] != len(chunks):
+        raise SystemExit(
+            f"向量条数 {vectors.shape[0]} 与 chunk 条数 {len(chunks)} 不一致，拒绝落盘"
+        )
     out_dir = config.paths.embeddings_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     np.save(out_dir / "vectors.npy", vectors)
@@ -100,6 +100,8 @@ def save_vectors(config: Config, vectors: np.ndarray) -> None:
         "dimensions": config.embedding.dimensions,
         "count": int(vectors.shape[0]),
         "chunks_file": config.paths.chunks_file.relative_to(ROOT).as_posix(),
+        "chunks_sha256": chunks_sha256(config.paths.chunks_file),
+        "chunking": chunking_params(config),
         "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
     }
     (out_dir / "manifest.json").write_text(
@@ -108,25 +110,40 @@ def save_vectors(config: Config, vectors: np.ndarray) -> None:
 
 
 def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
-    """已有可用向量则直接加载，否则嵌入并落盘。"""
+    """已有可用向量则直接加载，否则嵌入并落盘。
+
+    复用条件除模型/维度/条数外，还要求 chunks.jsonl 的内容指纹一致：
+    只改文本或切块参数、条数恰好不变时，旧向量不再可用。
+    条数相等只能说明数量对得上，发现不了「条数相同、切块边界或文本变了」；
+    这种行序错位只能靠全文内容指纹发现。
+    """
     vectors_path = config.paths.embeddings_dir / "vectors.npy"
     manifest_path = config.paths.embeddings_dir / "manifest.json"
+    # 对 chunks.jsonl 全部字节做 sha256：既覆盖文本内容，也覆盖行序与切块边界，
+    # 且不受条数相同影响（count 只能发现条数变化）。
+    digest = chunks_sha256(config.paths.chunks_file)
     if vectors_path.exists() and manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if (
-            manifest["model"] == config.embedding.model
-            and manifest["dimensions"] == config.embedding.dimensions
-            and manifest["count"] == len(chunks)
+            manifest.get("model") == config.embedding.model
+            and manifest.get("dimensions") == config.embedding.dimensions
+            and manifest.get("count") == len(chunks)
+            and manifest.get("chunks_sha256") == digest
         ):
             print(f"复用已嵌入向量：{manifest['count']} 条 -> {vectors_path}")
             return np.load(vectors_path)
-        print("已有向量与当前模型/语料不一致，重新嵌入 ...")
+        if manifest.get("chunks_sha256") != digest:
+            # 语料字节变了（或旧清单没有指纹）：行序/内容可能已与向量错位
+            print("chunks.jsonl 内容已变更（或清单缺少指纹），重新嵌入 ...")
+        else:
+            # 语料没变，是模型、维度或条数配置与清单不一致（如换了嵌入模型）
+            print("已有向量与当前模型/语料不一致，重新嵌入 ...")
     else:
         print("未找到已嵌入向量，开始嵌入 ...")
 
     started = time.perf_counter()
     vectors = embed_chunks(build_embeddings(config), config, chunks)
-    save_vectors(config, vectors)
+    save_vectors(config, chunks, vectors)
     print(
         f"{len(chunks)} 个 chunk -> {vectors.shape} float32，"
         f"耗时 {time.perf_counter() - started:.1f}s -> {config.paths.embeddings_dir}"

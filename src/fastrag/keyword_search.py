@@ -3,6 +3,8 @@
 - 索引与检索参数来自 config/fastrag.toml（[paths]、[bm25]、[retrieval]）
 - 语料是 chunk_docs 产出的 data/chunks.jsonl（每行含 id/source/start/end/token_count/text）
 - 索引连同 corpus 落盘到 data/bm25-index/，检索时无需重新切块
+- 索引同时写入 meta.json（语料 sha256 + method/stopwords + 切块参数）；
+  检索前校验，语料或参数变化时要求重建，避免配置静默失效
 
 用法:
     uv run python -m fastrag.keyword_search build
@@ -11,23 +13,25 @@
 """
 
 import argparse
+import datetime
 import json
 
 import bm25s
 
+from fastrag.chunks import chunking_params, chunks_sha256, load_chunks
 from fastrag.config import Config, load_config
 
 SNIPPET_CHARS = 160
+REBUILD_HINT = "uv run python -m fastrag.keyword_search build"
 
 
-def load_chunks(config: Config) -> list[dict]:
-    """读取 JSONL 形式的 chunk 语料。"""
-    with config.paths.chunks_file.open(encoding="utf-8") as fh:
-        return [json.loads(line) for line in fh if line.strip()]
+def index_params(config: Config) -> dict:
+    """记录影响 BM25 索引的构建参数，写入 meta.json。"""
+    return {"method": config.bm25.method, "stopwords": config.bm25.stopwords}
 
 
 def build_index(config: Config) -> None:
-    """对全部 chunk 建立 BM25 索引，并把 corpus 一并落盘。"""
+    """对全部 chunk 建立 BM25 索引，并把 corpus 与元信息一并落盘。"""
     chunks = load_chunks(config)
     tokenized = bm25s.tokenize(
         [chunk["text"] for chunk in chunks],
@@ -37,9 +41,40 @@ def build_index(config: Config) -> None:
     retriever = bm25s.BM25(method=config.bm25.method)
     retriever.index(tokenized, show_progress=False)
 
-    config.paths.bm25_index_dir.mkdir(parents=True, exist_ok=True)
-    retriever.save(config.paths.bm25_index_dir, corpus=chunks, show_progress=False)
-    print(f"{len(chunks)} 个 chunk 已建索引 -> {config.paths.bm25_index_dir}")
+    index_dir = config.paths.bm25_index_dir
+    index_dir.mkdir(parents=True, exist_ok=True)
+    retriever.save(index_dir, corpus=chunks, show_progress=False)
+    meta = {
+        "chunks_sha256": chunks_sha256(config.paths.chunks_file),
+        "count": len(chunks),
+        "bm25": index_params(config),
+        "chunking": chunking_params(config),
+        "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+    }
+    (index_dir / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"{len(chunks)} 个 chunk 已建索引 -> {index_dir}")
+
+
+def check_index(config: Config) -> None:
+    """校验索引与当前语料、BM25 参数一致；不一致时要求重建而不是静默使用。"""
+    meta_path = config.paths.bm25_index_dir / "meta.json"
+    if not meta_path.exists():
+        raise SystemExit(
+            f"BM25 索引缺少 meta.json（旧版索引无法校验），请重新运行: {REBUILD_HINT}"
+        )
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("chunks_sha256") != chunks_sha256(config.paths.chunks_file):
+        raise SystemExit(
+            f"chunks.jsonl 已变更，BM25 索引与语料不一致，请重新运行: {REBUILD_HINT}"
+        )
+    params = index_params(config)
+    if meta.get("bm25") != params:
+        raise SystemExit(
+            f"bm25 参数已变更（索引: {meta.get('bm25')}，当前: {params}），"
+            f"请重新运行: {REBUILD_HINT}"
+        )
 
 
 def search(
@@ -52,10 +87,12 @@ def search(
 
     min_score 为 None 时取 config.bm25.min_score；只保留 score > min_score 的命中，
     默认过滤掉零分文档，避免无关键词命中的 chunk 进入融合。
+    索引与语料/参数不一致时抛 SystemExit，提示重建。
     """
     index_dir = config.paths.bm25_index_dir
     if not index_dir.exists():
-        raise SystemExit("索引不存在，请先运行: uv run python -m fastrag.keyword_search build")
+        raise SystemExit(f"索引不存在，请先运行: {REBUILD_HINT}")
+    check_index(config)
 
     retriever = bm25s.BM25.load(index_dir, load_corpus=True, show_progress=False)
     query_tokens = bm25s.tokenize(

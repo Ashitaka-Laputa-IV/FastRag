@@ -33,8 +33,9 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
+from fastrag.chunks import load_chunks
 from fastrag.config import ROOT, Config, load_config, load_env
-from fastrag.embed_chunks import ensure_vectors, load_chunks, search as search_vectors
+from fastrag.embed_chunks import ensure_vectors, search as search_vectors
 from fastrag.keyword_search import search as search_keywords
 from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
