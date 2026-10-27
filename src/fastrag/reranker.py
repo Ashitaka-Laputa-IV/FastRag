@@ -71,7 +71,11 @@ def rerank_chunks(
 
 def main() -> None:
     # 演示只用到关键词检索，导入放在 main 里，避免模块级依赖 bm25s
-    from fastrag.keyword_search import format_snippet, search as search_keywords
+    from fastrag.keyword_search import (
+        format_snippet,
+        load_index,
+        search as search_keywords,
+    )
 
     parser = argparse.ArgumentParser(description="对检索候选做重排")
     parser.add_argument("text", help="查询语句")
@@ -80,7 +84,9 @@ def main() -> None:
 
     load_env()
     config = load_config()
-    candidates = search_keywords(config, args.text, config.retrieval.bm25_candidates)
+    candidates = search_keywords(
+        load_index(config), config, args.text, config.retrieval.bm25_candidates
+    )
     documents = rerank_chunks(
         build_reranker(config), args.text, [chunk for _, chunk in candidates]
     )

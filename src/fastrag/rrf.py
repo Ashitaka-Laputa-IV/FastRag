@@ -25,9 +25,10 @@ from typing import Sequence
 
 from fastrag.chunks import load_chunks
 from fastrag.config import load_config, load_env
-from fastrag.embed_chunks import ensure_vectors, search as search_vectors
+from fastrag.embed_chunks import build_embeddings, ensure_vectors, search as search_vectors
 from fastrag.keyword_search import (
     format_snippet,
+    load_index,
     search as search_keywords,
 )
 
@@ -67,12 +68,16 @@ def main() -> None:
     load_env()
     config = load_config()
 
-    bm25_hits = search_keywords(config, args.text, config.retrieval.bm25_candidates)
-
     chunks = load_chunks(config)
-    vectors = ensure_vectors(config, chunks)
+    embeddings = build_embeddings(config)
+    vectors = ensure_vectors(config, chunks, embeddings)
+    retriever = load_index(config)
+
+    bm25_hits = search_keywords(
+        retriever, config, args.text, config.retrieval.bm25_candidates
+    )
     vector_hits = search_vectors(
-        config, vectors, chunks, args.text, config.retrieval.vector_candidates
+        embeddings, vectors, chunks, args.text, config.retrieval.vector_candidates
     )
 
     rankings = [[chunk for _, chunk in bm25_hits], [chunk for _, chunk in vector_hits]]
