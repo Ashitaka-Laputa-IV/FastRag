@@ -30,8 +30,9 @@ timeout = 120
 max_retries = 3
 
 [llm.route]
+# 规划用更快的云端模型：直测首 token 230 ms（DeepSeek-V4.1-Flash 为 411 ms）
 endpoint = "siliconflow"
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
+model = "tencent/Hunyuan-A13B-Instruct"
 provider = "openai"
 temperature = 0.7
 thinking = false
