@@ -23,7 +23,8 @@ from fastrag.errors import FastragError
 PACKAGE_RESOURCES = importlib.resources.files("fastrag.resources")
 FUSION_METHODS = ("rrf", "rerank")
 BM25_METHODS = ("lucene", "robertson", "atire", "bm25l", "bm25+")
-# 与 bm25s._infer_stopwords 支持的语言名/别名保持一致
+# 与 bm25s._infer_stopwords 支持的语言名/别名保持一致；
+# bm25s 也接受 True/False（默认/禁用），这里只支持语言名或列表，禁用请写 []。
 BM25_STOPWORDS = (
     "english",
     "en",
@@ -303,7 +304,7 @@ def _number(owner: str, value: object) -> float:
 
 def _validate_llm_role(role: dict, name: str) -> None:
     """校验一个 LLM 角色（含递归的 fallback）的温度等参数。"""
-    temperature = _number(f"llm.{name}.temperature", role["temperature"])
+    temperature = _number(f"llm.{name}.temperature", role.get("temperature"))
     if not 0 <= temperature <= 2:
         raise FastragError(
             f"llm.{name}.temperature 必须在 0~2 之间，当前为 {temperature!r}"

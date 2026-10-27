@@ -11,7 +11,7 @@
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
 - rerank 调用失败时自动降级为 RRF，保证一次外部服务故障不阻断回答
 - 路由与回答都按各自的 [llm.*].retries 重试；回答耗尽后改用 [llm.answer.fallback]，
-  路由耗尽后若有备用模型则换用，否则跳过检索直接回答
+  路由耗尽后若有备用模型则换用，否则用原始问题继续检索
 - 全部失败时打印提示并继续交互，不退出整个 ask 循环
 - 不需要检索时 answer 节点改用 chat 提示词直接回答，不套「依据资料」的约束
 
@@ -129,22 +129,33 @@ class Pipeline:
         就退回原始问题，保证召回节点总能拿到可用的查询。
 
         路由模型按 [llm.route].retries 重试，耗尽后若有 fallback 则换备用模型；
-        全部失败时跳过检索直接回答，避免整轮问答没有任何响应。
+        全部失败时用原始问题继续检索，避免把路由故障误判成「不需要检索」。
         """
         prompt = self.prompts["search_plan"].format(question=state["question"])
         route = self.config.llm.route
         plan = self._call_with_retries(
             lambda: self.plan_chain.invoke(prompt), route, "路由模型"
         )
-        if plan is None and self.route_fallback_chain is not None:
+        fallback = route.fallback
+        if (
+            plan is None
+            and fallback is not None
+            and self.route_fallback_chain is not None
+        ):
+            chain = self.route_fallback_chain
             plan = self._call_with_retries(
-                lambda: self.route_fallback_chain.invoke(prompt),
-                route.fallback,
-                "路由备用模型",
+                lambda: chain.invoke(prompt), fallback, "路由备用模型"
             )
         if plan is None:
-            print("路由失败，跳过检索直接回答", file=sys.stderr)
-            return {"need_search": False, "bm25_query": "", "vector_query": ""}
+            # 路由不可用时用原始问题继续检索：比跳过检索更符合 RAG 语义，
+            # 避免把「路由故障」误当成「不需要检索」而诱导模型凭空作答。
+            print("路由失败，使用原始问题继续检索", file=sys.stderr)
+            question = state["question"]
+            return {
+                "need_search": True,
+                "bm25_query": question,
+                "vector_query": question,
+            }
         if not plan.need_search:
             return {"need_search": False, "bm25_query": "", "vector_query": ""}
 
