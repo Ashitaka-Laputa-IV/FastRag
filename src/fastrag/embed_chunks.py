@@ -95,12 +95,23 @@ def embed_chunks(
     return vectors
 
 
-def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> None:
-    """落盘向量矩阵与元信息（含语料指纹，便于下次校验行序是否仍对齐）。"""
+def save_vectors(
+    config: Config,
+    chunks: list[dict],
+    vectors: np.ndarray,
+    digest: str | None = None,
+) -> None:
+    """落盘向量矩阵与元信息（含语料指纹，便于下次校验行序是否仍对齐）。
+
+    digest 由调用方传入时直接复用；为 None 时再读一次 chunks.jsonl 计算，
+    单独调用本函数（如脚本/测试）也能拿到正确指纹。
+    """
     if vectors.shape[0] != len(chunks):
         raise FastragError(
             f"向量条数 {vectors.shape[0]} 与 chunk 条数 {len(chunks)} 不一致，拒绝落盘"
         )
+    if digest is None:
+        digest = chunks_sha256(config.paths.chunks_file)
     out_dir = config.paths.embeddings_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     np.save(out_dir / "vectors.npy", vectors)
@@ -109,7 +120,7 @@ def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> Non
         "dimensions": config.embedding.dimensions,
         "count": int(vectors.shape[0]),
         "chunks_file": display_path(config.paths.chunks_file),
-        "chunks_sha256": chunks_sha256(config.paths.chunks_file),
+        "chunks_sha256": digest,
         # chunking 只用于排查，不参与复用判断；语料一致性由上面的指纹保证
         "chunking": chunking_params(config),
         "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
@@ -159,7 +170,7 @@ def ensure_vectors(
 
     started = time.perf_counter()
     vectors = embed_chunks(embeddings or build_embeddings(config), config, chunks)
-    save_vectors(config, chunks, vectors)
+    save_vectors(config, chunks, vectors, digest)
     print(
         f"{len(chunks)} 个 chunk -> {vectors.shape} float32，"
         f"耗时 {time.perf_counter() - started:.1f}s -> {config.paths.embeddings_dir}"
