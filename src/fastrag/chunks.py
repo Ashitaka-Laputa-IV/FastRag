@@ -5,7 +5,6 @@
 导致的静默错位。
 """
 
-import functools
 import hashlib
 import json
 import pathlib
@@ -27,25 +26,28 @@ def load_chunks(config: Config) -> list[dict]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-@functools.lru_cache(maxsize=8)
-def _digest(path: str, mtime_ns: int, size: int) -> str:
-    """按 (路径, mtime, 大小) 缓存指纹，避免每次检索都重读整份语料。"""
-    sha = hashlib.sha256()
-    with pathlib.Path(path).open("rb") as fh:
-        for block in iter(lambda: fh.read(BLOCK_SIZE), b""):
-            sha.update(block)
-    return sha.hexdigest()
-
-
 def chunks_sha256(path: pathlib.Path) -> str:
-    """返回 chunks.jsonl 的 sha256；mtime 或大小变化后自动重算。"""
+    """返回 chunks.jsonl 的 sha256 指纹。
+
+    范围是文件的**全部字节**（含换行与分隔符），不解析 JSON、不按 chunk
+    逐条累加，因此：
+    - 同样的字节内容永远得到同一个指纹，与文件路径、是否复制/移动无关；
+    - 只有字节内容变化才会换指纹，时间戳或大小变化本身不影响结果；
+    - 行序、空白、字段顺序等任何改动都会让指纹变化，而 `count` 不会。
+
+    每次调用都完整读一遍（约 5 MB / 几毫秒），不做按 mtime 的缓存，
+    避免「内容变了但 mtime 没变」时拿到旧指纹。
+    """
     if not path.exists():
         raise SystemExit(
             f"chunk 语料不存在: {path}\n"
             "请先运行: uv run python -m fastrag.chunk_docs"
         )
-    stat = path.stat()
-    return _digest(str(path), stat.st_mtime_ns, stat.st_size)
+    sha = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(BLOCK_SIZE), b""):
+            sha.update(block)
+    return sha.hexdigest()
 
 
 def chunking_params(config: Config) -> dict:

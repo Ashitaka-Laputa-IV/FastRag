@@ -114,9 +114,13 @@ def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
 
     复用条件除模型/维度/条数外，还要求 chunks.jsonl 的内容指纹一致：
     只改文本或切块参数、条数恰好不变时，旧向量不再可用。
+    条数相等只能说明数量对得上，发现不了「条数相同、切块边界或文本变了」；
+    这种行序错位只能靠全文内容指纹发现。
     """
     vectors_path = config.paths.embeddings_dir / "vectors.npy"
     manifest_path = config.paths.embeddings_dir / "manifest.json"
+    # 对 chunks.jsonl 全部字节做 sha256：既覆盖文本内容，也覆盖行序与切块边界，
+    # 且不受条数相同影响（count 只能发现条数变化）。
     digest = chunks_sha256(config.paths.chunks_file)
     if vectors_path.exists() and manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -129,8 +133,10 @@ def ensure_vectors(config: Config, chunks: list[dict]) -> np.ndarray:
             print(f"复用已嵌入向量：{manifest['count']} 条 -> {vectors_path}")
             return np.load(vectors_path)
         if manifest.get("chunks_sha256") != digest:
+            # 语料字节变了（或旧清单没有指纹）：行序/内容可能已与向量错位
             print("chunks.jsonl 内容已变更（或清单缺少指纹），重新嵌入 ...")
         else:
+            # 语料没变，是模型、维度或条数配置与清单不一致（如换了嵌入模型）
             print("已有向量与当前模型/语料不一致，重新嵌入 ...")
     else:
         print("未找到已嵌入向量，开始嵌入 ...")
