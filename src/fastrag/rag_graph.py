@@ -4,12 +4,12 @@
           -> fuse(RRF 或 rerank) -> answer(LLM)
 
 - 流程图见 README.md
-- 提示词单独放在 prompts/，便于迭代
-- 参数统一见 config/fastrag.toml；判断检索与生成回答分别在
+- 提示词默认随包分发（fastrag.resources/prompts），可用 $FASTRAG_HOME/prompts 覆盖
+- 参数统一见配置文件；判断检索与生成回答分别在
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
-- 不需要检索时 answer 节点改用 prompts/chat.txt 直接回答，不套「依据资料」的约束
+- 不需要检索时 answer 节点改用 chat 提示词直接回答，不套「依据资料」的约束
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -34,7 +34,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from fastrag.chunks import load_chunks
-from fastrag.config import ROOT, Config, load_config, load_env
+from fastrag.config import Config, load_config, load_env, prompt_path
 from fastrag.embed_chunks import (
     build_embeddings,
     ensure_vectors,
@@ -46,7 +46,6 @@ from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
 
-PROMPTS_DIR = ROOT / "prompts"
 
 
 class RAGState(TypedDict, total=False):
@@ -77,8 +76,8 @@ class SearchPlan(BaseModel):
 
 
 def load_prompt(name: str) -> str:
-    """读取 prompts/ 下的提示词模板。"""
-    return (PROMPTS_DIR / f"{name}.txt").read_text(encoding="utf-8")
+    """读取提示词模板：优先工作目录下的 prompts/，否则用包内默认模板。"""
+    return prompt_path(name).read_text(encoding="utf-8")
 
 
 class Pipeline:

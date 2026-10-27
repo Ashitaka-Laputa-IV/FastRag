@@ -3,7 +3,7 @@
 - 通过 `init_reranker("custom:<model>", base_url=..., api_key=...)` 创建重排器，
   调用任意 Cohere 风格的 `/rerank` 接口（交叉编码器，默认配置指向 SiliconFlow）
 - 排序、top_n 与 relevance_score 写回 metadata 均由 `compress_documents` 提供
-- 参数来自 config/fastrag.toml 的 [reranker]、[endpoints]、[retrieval]
+- 参数来自配置文件的 [reranker]、[endpoints]、[retrieval]
 - 演示流程：BM25 召回 bm25_candidates 条 -> 重排 -> 输出 top_n 条
   （`rerank_chunks` 只依赖 chunk 列表，可接任意检索器的候选）
 

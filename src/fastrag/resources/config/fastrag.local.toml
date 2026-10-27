@@ -1,11 +1,12 @@
 # 全本地链路示例配置：嵌入用本地 bge-m3，检索规划与回答用本地 qwen3-4b-instruct。
-# 与 config/fastrag.toml 的区别只在模型、endpoint、维度与向量目录；
+# 与包内默认配置的区别只在模型、endpoint、维度与向量目录；
 # 语料、切块、BM25 索引与融合参数保持一致，便于与云端配置直接对比。
 #
 # 用法（不需要改默认配置）：
-#   export FASTRAG_CONFIG=config/fastrag.local.toml
-#   uv run python -m fastrag.prepare
-#   uv run python -m fastrag.rag_graph
+#   uv run fastrag --config local prepare
+#   uv run fastrag --config local ask
+#
+# 也可以复制到 $FASTRAG_HOME/config/fastrag.toml 作为默认配置使用。
 #
 # 本地服务通常不校验 key，所以 api_key_env 留空；客户端会自动用占位 key。
 # 若本机设置了 socks 代理，访问 127.0.0.1 需要 NO_PROXY=127.0.0.1,localhost。

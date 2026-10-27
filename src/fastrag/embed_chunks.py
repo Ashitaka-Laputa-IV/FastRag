@@ -1,6 +1,6 @@
 """为切块后的 chunk 生成向量，并用固定问题演示一次向量检索。
 
-模型与接口由 config/fastrag.toml 的 [embedding]、[endpoints]、[paths] 指定，
+模型与接口由配置文件的 [embedding]、[endpoints]、[paths] 指定，
 代码与具体模型无关。
 
 - API key 只从 .env / 环境变量读取；endpoint 的 api_key_env 留空表示本地服务，
@@ -35,7 +35,7 @@ import numpy as np
 from langchain_openai import OpenAIEmbeddings
 
 from fastrag.chunks import chunking_params, chunks_sha256, load_chunks
-from fastrag.config import ROOT, Config, load_config, load_env
+from fastrag.config import Config, display_path, load_config, load_env
 from fastrag.errors import FastragError, run_cli
 
 SNIPPET_CHARS = 160
@@ -107,7 +107,7 @@ def save_vectors(config: Config, chunks: list[dict], vectors: np.ndarray) -> Non
         "model": config.embedding.model,
         "dimensions": config.embedding.dimensions,
         "count": int(vectors.shape[0]),
-        "chunks_file": config.paths.chunks_file.relative_to(ROOT).as_posix(),
+        "chunks_file": display_path(config.paths.chunks_file),
         "chunks_sha256": chunks_sha256(config.paths.chunks_file),
         "chunking": chunking_params(config),
         "created_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),

@@ -1,6 +1,6 @@
 """下载 LangChain 官方 Python 文档到 data/langchain-docs/。
 
-目标目录来自 config/fastrag.toml 的 paths.docs_dir。
+目标目录来自配置文件的 paths.docs_dir。
 只抓 oss/python 下的文档（LangChain / LangGraph 等库的使用知识），
 排除 contributing 等非库内容。
 

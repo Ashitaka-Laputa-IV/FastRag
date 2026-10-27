@@ -7,6 +7,8 @@ authors = [
     { name = "Ashitaka-Laputa-IV", email = "Ashitaka-Laputa-IV@outlook.com" }
 ]
 requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "bm25s>=0.3.15",
     "chonkie>=1.7.0",
@@ -19,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-fastrag = "fastrag:main"
+fastrag = "fastrag.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
