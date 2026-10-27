@@ -50,6 +50,8 @@ def build_llm(config: LLMConfig, thinking: bool | None = None) -> BaseChatModel:
         base_url=config.endpoint.base_url,
         api_key=api_key,
         temperature=config.temperature,
+        # 重试统一交给 rag_graph 的 Runnable.with_retry，避免 SDK 与配置各重试一轮
+        max_retries=0,
         **extra,
     )
 

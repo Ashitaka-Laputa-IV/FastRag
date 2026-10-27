@@ -10,8 +10,9 @@
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
 - rerank 调用失败时自动降级为 RRF，保证一次外部服务故障不阻断回答
-- 路由与回答都按各自的 [llm.*].retries 重试；回答耗尽后改用 [llm.answer.fallback]，
-  路由耗尽后若有备用模型则换用，否则用原始问题继续检索
+- 路由与回答的重试/备用模型由 Runnable.with_retry / with_fallbacks 统一组装：
+  各自按 [llm.*].retries 重试，耗尽后换 fallback；回答全失败时本轮无回答，
+  路由全失败时用原始问题继续检索
 - 全部失败时打印提示并继续交互，不退出整个 ask 循环
 - 不需要检索时 answer 节点改用 chat 提示词直接回答，不套「依据资料」的约束
 
@@ -30,12 +31,11 @@
 
 import sys
 import warnings
-from collections.abc import Callable
 from functools import lru_cache
-from typing import TypeVar, TypedDict
+from typing import TypedDict
 
 from langchain_core.documents import Document
-from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
@@ -51,8 +51,6 @@ from fastrag.keyword_search import load_index, search as search_keywords
 from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
-
-T = TypeVar("T")
 
 
 class RAGState(TypedDict, total=False):
@@ -97,19 +95,9 @@ class Pipeline:
     def __init__(self, config: Config):
         load_env()
         self.config = config
-        self.route_llm: BaseChatModel = build_llm(config.llm.route)
-        self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
-        self.fallback_llm: BaseChatModel | None = (
-            build_llm(config.llm.answer.fallback)
-            if config.llm.answer.fallback
-            else None
-        )
-        self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
-        self.route_fallback_chain = (
-            build_llm(config.llm.route.fallback).with_structured_output(SearchPlan)
-            if config.llm.route.fallback
-            else None
-        )
+        # 每个角色一条「主模型重试 -> 备用模型重试」链，节点里不再手写循环
+        self.plan_chain = self._model_chain(config.llm.route, SearchPlan)
+        self.answer_chain = self._model_chain(config.llm.answer)
         self.prompts = {
             name: load_prompt(name) for name in ("search_plan", "answer", "chat")
         }
@@ -122,34 +110,52 @@ class Pipeline:
         )
         self.graph = self._build_graph()
 
+    @staticmethod
+    def _model_chain(
+        config: LLMConfig, schema: type[BaseModel] | None = None
+    ) -> Runnable:
+        """按角色配置组装「重试 + 备用模型」链。
+
+        `retries` 是首次失败后的重试次数，这里换算成 `with_retry` 的总尝试次数；
+        显式关掉指数退避，保持 CLI 立即重试的原有行为。
+        备用模型也按自己的 retries 重试，最终顺序为：
+        主模型重试耗尽 -> 备用模型重试耗尽 -> 抛出异常。
+        """
+
+        def one(role: LLMConfig) -> Runnable:
+            model = build_llm(role)
+            runnable = (
+                model.with_structured_output(schema) if schema is not None else model
+            )
+            return runnable.with_retry(
+                stop_after_attempt=1 + role.retries,
+                wait_exponential_jitter=False,
+            )
+
+        chain = one(config)
+        if config.fallback is not None:
+            chain = chain.with_fallbacks([one(config.fallback)])
+        return chain
+
     def plan_search(self, state: RAGState) -> dict:
         """一次调用同时判断是否检索，并给出两路各自的查询。
 
         不需要检索时不生成查询，直接返回空字符串；需要检索时若模型漏填某一路，
         就退回原始问题，保证召回节点总能拿到可用的查询。
 
-        路由模型按 [llm.route].retries 重试，耗尽后若有 fallback 则换备用模型；
-        全部失败时用原始问题继续检索，避免把路由故障误判成「不需要检索」。
+        路由模型的重试与备用模型由 `_model_chain` 统一组装；主/备都失败时
+        用原始问题继续检索，避免把路由故障误判成「不需要检索」。
         """
         prompt = self.prompts["search_plan"].format(question=state["question"])
-        route = self.config.llm.route
-        plan = self._call_with_retries(
-            lambda: self.plan_chain.invoke(prompt), route, "路由模型"
-        )
-        fallback = route.fallback
-        if (
-            plan is None
-            and fallback is not None
-            and self.route_fallback_chain is not None
-        ):
-            chain = self.route_fallback_chain
-            plan = self._call_with_retries(
-                lambda: chain.invoke(prompt), fallback, "路由备用模型"
-            )
-        if plan is None:
+        try:
+            plan = self.plan_chain.invoke(prompt)
+        except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
             # 路由不可用时用原始问题继续检索：比跳过检索更符合 RAG 语义，
             # 避免把「路由故障」误当成「不需要检索」而诱导模型凭空作答。
-            print("路由失败，使用原始问题继续检索", file=sys.stderr)
+            print(
+                f"路由失败（{type(exc).__name__}: {exc}），使用原始问题继续检索",
+                file=sys.stderr,
+            )
             question = state["question"]
             return {
                 "need_search": True,
@@ -250,58 +256,19 @@ class Pipeline:
         return {"answer": self._answer_text(prompt)}
 
     def _answer_text(self, prompt: str) -> str:
-        """主模型按配置重试，重试耗尽后改用备用模型；全部失败返回空字符串。
+        """调用回答链（主模型重试 -> 备用模型重试）；全部失败返回空字符串。
 
-        次数与备用模型都来自 `[llm.answer]` 的 `retries` / `[llm.answer.fallback]`；
-        外部 LLM 偶发超时/5xx 不应终止整个交互循环。
+        重试次数与备用模型都来自 `[llm.answer]`；外部 LLM 偶发超时/5xx
+        不应终止整个交互循环。
         """
-        config = self.config.llm.answer
-        text = self._call_with_retries(
-            lambda: self.answer_llm.invoke(prompt).text.strip(),
-            config,
-            "回答模型",
-        )
-        if text is not None:
-            return text
-
-        fallback = config.fallback
-        if fallback is None or self.fallback_llm is None:
-            print("未配置备用模型，本轮没有回答", file=sys.stderr)
+        try:
+            return self.answer_chain.invoke(prompt).text.strip()
+        except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
+            print(
+                f"回答生成失败（{type(exc).__name__}: {exc}），本轮没有回答",
+                file=sys.stderr,
+            )
             return ""
-        text = self._call_with_retries(
-            lambda: self.fallback_llm.invoke(prompt).text.strip(),
-            fallback,
-            "备用模型",
-        )
-        if text is not None:
-            return text
-        print("备用模型也失败，本轮没有回答", file=sys.stderr)
-        return ""
-
-    @staticmethod
-    def _call_with_retries(
-        call: Callable[[], T],
-        config: LLMConfig,
-        label: str,
-    ) -> T | None:
-        """按 config.retries 重试调用；成功返回结果，重试耗尽返回 None。"""
-        attempts = 1 + config.retries
-        for attempt in range(attempts):
-            try:
-                return call()
-            except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
-                if attempt < attempts - 1:
-                    print(
-                        f"{label}生成失败（{type(exc).__name__}: {exc}），"
-                        f"重试 {attempt + 1}/{attempts - 1} ...",
-                        file=sys.stderr,
-                    )
-                else:
-                    print(
-                        f"{label}生成失败（{type(exc).__name__}: {exc}）",
-                        file=sys.stderr,
-                    )
-        return None
 
     @staticmethod
     def _merge(*rankings: list[dict]) -> list[dict]:
