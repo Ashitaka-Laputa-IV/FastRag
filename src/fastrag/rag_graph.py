@@ -9,6 +9,7 @@
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
+- 不需要检索时 answer 节点改用 prompts/chat.txt 直接回答，不套「依据资料」的约束
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -84,7 +85,7 @@ class Pipeline:
         self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
         self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
         self.prompts = {
-            name: load_prompt(name) for name in ("search_plan", "answer")
+            name: load_prompt(name) for name in ("search_plan", "answer", "chat")
         }
         self.chunks = load_chunks(config)
         self.vectors = ensure_vectors(config, self.chunks)
@@ -159,18 +160,26 @@ class Pipeline:
         return {"fused": [chunk for _, chunk in fused][:top_n]}
 
     def answer(self, state: RAGState) -> dict:
-        """把检索片段拼进 prompt，让 LLM 依据资料作答。"""
-        chunks = state.get("fused", [])[: self.config.retrieval.top_n]
-        context = (
-            "\n\n".join(
-                f"[{index}] {chunk['source']}\n{chunk['text']}"
-                for index, chunk in enumerate(chunks, start=1)
+        """按是否需要检索选择提示词，再让 LLM 作答。
+
+        需要检索时把片段拼进 answer 模板，要求只依据资料；
+        不需要检索时没有资料可依据，改用 chat 模板直接回答，
+        否则模型会把「你好」这类问题也答成「资料不足」。
+        """
+        if state.get("need_search", True):
+            chunks = state.get("fused", [])[: self.config.retrieval.top_n]
+            context = (
+                "\n\n".join(
+                    f"[{index}] {chunk['source']}\n{chunk['text']}"
+                    for index, chunk in enumerate(chunks, start=1)
+                )
+                or "（无检索结果）"
             )
-            or "（无检索结果）"
-        )
-        prompt = self.prompts["answer"].format(
-            context=context, question=state["question"]
-        )
+            prompt = self.prompts["answer"].format(
+                context=context, question=state["question"]
+            )
+        else:
+            prompt = self.prompts["chat"].format(question=state["question"])
         return {"answer": self.answer_llm.invoke(prompt).text.strip()}
 
     @staticmethod
