@@ -8,6 +8,7 @@
 - 参数统一见 config/fastrag.toml；判断检索与生成回答分别在
   [llm.route]、[llm.answer] 配置，可使用不同模型与厂家
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
+- 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
 
 用法:
     uv run python -m fastrag.rag_graph     # 交互式问答，回答通过 stream_events 流式输出
@@ -134,8 +135,9 @@ class Pipeline:
     def fuse(self, state: RAGState) -> dict:
         """按配置的融合方式（rrf / rerank）排序两路召回结果。
 
-        rerank 分支用原始问题做 cross-encoder 输入（保留完整语义），
-        与 RRF 只看名次的口径不同，两种方式都按 retrieval.top_n 截断。
+        rerank 分支用改写后的英文 vector_query 做 cross-encoder 输入，
+        与向量召回使用同一个查询，保证打分口径与召回一致；
+        RRF 只看名次，两种方式都按 retrieval.top_n 截断。
         """
         bm25 = state.get("bm25", [])
         vector = state.get("vector", [])
@@ -145,7 +147,8 @@ class Pipeline:
         top_n = self.config.retrieval.top_n
         if self.config.fusion.method == "rerank":
             merged = self._merge(bm25, vector)
-            documents = rerank_chunks(self.reranker, state["question"], merged)
+            query = state.get("vector_query") or state["question"]
+            documents = rerank_chunks(self.reranker, query, merged)
             return {
                 "fused": [self._to_chunk(document) for document in documents[:top_n]]
             }
