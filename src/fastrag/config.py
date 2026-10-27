@@ -112,6 +112,8 @@ class LLMConfig:
 
     thinking 只对推理模型有意义：True 用厂家默认（通常开启），
     False 时下发 enable_thinking=false 关掉思考，首 token 直接是回答正文。
+    retries 是主模型失败后的重试次数；重试耗尽后若配置了 fallback，
+    则改用备用模型（fallback 自身也可以带 retries）。
     """
 
     endpoint: EndpointConfig
@@ -119,6 +121,8 @@ class LLMConfig:
     provider: str
     temperature: float
     thinking: bool = True
+    retries: int = 0
+    fallback: "LLMConfig | None" = None
 
 
 @dataclass(frozen=True)
@@ -211,16 +215,25 @@ def _endpoint(
 
 
 def _llm(
-    roles: dict, endpoints: dict[str, EndpointConfig], name: str
+    role: dict, endpoints: dict[str, EndpointConfig], name: str
 ) -> LLMConfig:
-    """读取一个 LLM 角色，并解析它引用的 endpoint。"""
-    role = roles[name]
+    """读取单个 LLM 角色，并解析它引用的 endpoint 与可选备用模型。"""
+    retries = role.get("retries", 0)
+    if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+        raise FastragError(
+            f"llm.{name}.retries 必须是非负整数，当前为 {retries!r}"
+        )
+    fallback = role.get("fallback")
     return LLMConfig(
         endpoint=_endpoint(endpoints, role["endpoint"], f"llm.{name}"),
         model=role["model"],
         provider=role["provider"],
         temperature=role["temperature"],
         thinking=role.get("thinking", True),
+        retries=retries,
+        fallback=(
+            _llm(fallback, endpoints, f"{name}.fallback") if fallback else None
+        ),
     )
 
 
@@ -365,8 +378,8 @@ def load_config(path: pathlib.Path | None = None) -> Config:
             max_retries=embedding["max_retries"],
         ),
         llm=LLMRoles(
-            route=_llm(llm, endpoints, "route"),
-            answer=_llm(llm, endpoints, "answer"),
+            route=_llm(llm["route"], endpoints, "route"),
+            answer=_llm(llm["answer"], endpoints, "answer"),
         ),
         reranker=RerankerConfig(
             endpoint=_endpoint(endpoints, reranker["endpoint"], "reranker"),

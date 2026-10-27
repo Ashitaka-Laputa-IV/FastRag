@@ -10,7 +10,8 @@
 - 两路查询都用英文：BM25 用术语叠加，向量检索用自然语言问句，plan_search 一次输出两条
 - 融合选 rerank 时，cross-encoder 与向量召回共用 vector_query（改写后的英文问句）
 - rerank 调用失败时自动降级为 RRF，保证一次外部服务故障不阻断回答
-- answer 调用失败重试一次；仍失败时打印提示并继续交互，不退出整个 ask 循环
+- answer 按 [llm.answer].retries 重试，耗尽后改用 [llm.answer.fallback] 备用模型；
+  全部失败时打印提示并继续交互，不退出整个 ask 循环
 - 不需要检索时 answer 节点改用 chat 提示词直接回答，不套「依据资料」的约束
 
 用法:
@@ -37,7 +38,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from fastrag.chunks import load_chunks
-from fastrag.config import Config, load_config, load_env, prompt_path
+from fastrag.config import Config, LLMConfig, load_config, load_env, prompt_path
 from fastrag.embed_chunks import (
     build_embeddings,
     ensure_vectors,
@@ -48,9 +49,6 @@ from fastrag.keyword_search import load_index, search as search_keywords
 from fastrag.llm import build_llm
 from fastrag.reranker import build_reranker, rerank_chunks
 from fastrag.rrf import rrf_fuse
-
-# 回答模型的总尝试次数（1 次调用 + 1 次重试）
-ANSWER_ATTEMPTS = 2
 
 
 class RAGState(TypedDict, total=False):
@@ -97,6 +95,11 @@ class Pipeline:
         self.config = config
         self.route_llm: BaseChatModel = build_llm(config.llm.route)
         self.answer_llm: BaseChatModel = build_llm(config.llm.answer)
+        self.fallback_llm: BaseChatModel | None = (
+            build_llm(config.llm.answer.fallback)
+            if config.llm.answer.fallback
+            else None
+        )
         self.plan_chain = self.route_llm.with_structured_output(SearchPlan)
         self.prompts = {
             name: load_prompt(name) for name in ("search_plan", "answer", "chat")
@@ -213,27 +216,53 @@ class Pipeline:
         return {"answer": self._answer_text(prompt)}
 
     def _answer_text(self, prompt: str) -> str:
-        """调用回答模型，失败时重试一次；连续失败返回空字符串。
+        """主模型按配置重试，重试耗尽后改用备用模型；全部失败返回空字符串。
 
-        外部 LLM 偶发超时/5xx 不应终止整个交互循环：重试一次仍失败时
-        只打印提示，本轮没有回答，用户可以继续提问。
+        次数与备用模型都来自 `[llm.answer]` 的 `retries` / `[llm.answer.fallback]`；
+        外部 LLM 偶发超时/5xx 不应终止整个交互循环。
         """
-        for attempt in range(ANSWER_ATTEMPTS):
+        config = self.config.llm.answer
+        text = self._invoke_with_retries(self.answer_llm, config, prompt, "回答模型")
+        if text is not None:
+            return text
+
+        fallback = config.fallback
+        if fallback is None or self.fallback_llm is None:
+            print("未配置备用模型，本轮没有回答", file=sys.stderr)
+            return ""
+        text = self._invoke_with_retries(
+            self.fallback_llm, fallback, prompt, "备用模型"
+        )
+        if text is not None:
+            return text
+        print("备用模型也失败，本轮没有回答", file=sys.stderr)
+        return ""
+
+    @staticmethod
+    def _invoke_with_retries(
+        llm: BaseChatModel,
+        config: LLMConfig,
+        prompt: str,
+        label: str,
+    ) -> str | None:
+        """按 config.retries 重试调用；成功返回文本，重试耗尽返回 None。"""
+        attempts = 1 + config.retries
+        for attempt in range(attempts):
             try:
-                return self.answer_llm.invoke(prompt).text.strip()
+                return llm.invoke(prompt).text.strip()
             except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
-                if attempt == ANSWER_ATTEMPTS - 1:
+                if attempt < attempts - 1:
                     print(
-                        f"生成失败（{type(exc).__name__}: {exc}），本轮没有回答",
+                        f"{label}生成失败（{type(exc).__name__}: {exc}），"
+                        f"重试 {attempt + 1}/{attempts - 1} ...",
                         file=sys.stderr,
                     )
-                    return ""
-                print(
-                    f"生成失败（{type(exc).__name__}: {exc}），"
-                    f"重试 {attempt + 1}/{ANSWER_ATTEMPTS - 1} ...",
-                    file=sys.stderr,
-                )
-        return ""
+                else:
+                    print(
+                        f"{label}生成失败（{type(exc).__name__}: {exc}）",
+                        file=sys.stderr,
+                    )
+        return None
 
     @staticmethod
     def _merge(*rankings: list[dict]) -> list[dict]:

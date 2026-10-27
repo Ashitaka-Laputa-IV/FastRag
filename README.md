@@ -77,6 +77,7 @@ API key 从 `.env` / 环境变量读取；每个 endpoint 用 `api_key_env` 指�
 
 - `[endpoints.*]`：厂家接入信息（`base_url` + `api_key_env`），嵌入、重排、各 LLM 角色都可引用不同厂家
 - `[llm.route]` / `[llm.answer]`：`plan_search`（判断是否检索 + 生成两路查询）与生成回答可分别配置模型、厂家与温度；`thinking = false` 关闭推理模型的思考
+- `[llm.*].retries`：调用失败后的重试次数；`[llm.answer.fallback]`：重试耗尽后使用的备用模型（默认配置指向本地 llama.cpp）
 - `api_key_env` 留空的 endpoint 视为本地服务，客户端用占位 key，不需要 `.env`
 - `[bm25]`：停用词、打分方法与 `min_score`；默认过滤掉分数不大于 0 的命中
 - 提示词：包内 `fastrag.resources/prompts/`，可在 `$FASTRAG_HOME/prompts/` 放同名文件覆盖
