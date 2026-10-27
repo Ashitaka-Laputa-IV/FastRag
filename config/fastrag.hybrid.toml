@@ -1,0 +1,74 @@
+# 混合链路配置：规划用本地 qwen3-4b-instruct，回答用 SiliconFlow 的 DeepSeek-V4.1-Flash，
+# 嵌入用本地 bge-m3。语料、BM25 索引、切块与融合参数与默认配置一致，便于直接对比。
+#
+# 用法：
+#   uv run python -m fastrag.bench --config config/fastrag.hybrid.toml
+
+[paths]
+docs_dir = "data/langchain-docs"
+chunks_file = "data/chunks.jsonl"
+embeddings_dir = "data/embeddings-bge-m3"  # 与全本地共用 bge-m3 向量
+bm25_index_dir = "data/bm25-index"
+
+[endpoints.local]
+base_url = "http://127.0.0.1:9938/v1"  # llama.cpp：qwen3-4b-instruct
+api_key_env = ""
+
+[endpoints.local_embed]
+base_url = "http://127.0.0.1:9931/v1"  # llama.cpp：bge-m3
+api_key_env = ""
+
+[endpoints.siliconflow]
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+
+[chunking]
+tokenizer = "cl100k_base"
+chunk_size = 512
+chunk_overlap = 128
+include_delim = "prev"
+
+[embedding]
+endpoint = "local_embed"
+model = "bge-m3"
+batch_size = 8
+dimensions = 1024
+timeout = 300
+max_retries = 3
+
+# 规划走本地：结构化输出只要判断 + 两条查询，0.9 s 左右，且不受公网影响。
+[llm.route]
+endpoint = "local"
+model = "qwen3-4b-instruct"
+provider = "openai"
+temperature = 0.7
+thinking = false
+
+# 回答走云端：本地 4B 处理 3-4k token 上下文的首 token 要 1.4 s，
+# DeepSeek 关思考约 0.4 s，且回答质量已有基线。
+[llm.answer]
+endpoint = "siliconflow"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+provider = "openai"
+temperature = 0.7
+thinking = false
+
+[reranker]
+endpoint = "local"
+model = "bge-reranker"
+timeout = 60
+
+[bm25]
+stopwords = "english"
+method = "lucene"
+min_score = 0.0
+
+[retrieval]
+bm25_candidates = 20
+vector_candidates = 20
+top_n = 5
+
+[fusion]
+method = "rrf"
+rrf_k = 60
+weights = [1.1, 1.0]
