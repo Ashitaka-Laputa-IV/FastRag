@@ -224,6 +224,94 @@ def _llm(
     )
 
 
+def _number(owner: str, value: object) -> float:
+    """确认配置值是数字（排除 bool 与字符串），否则抛 FastragError。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FastragError(f"{owner} 必须是数字，当前为 {value!r}")
+    return value
+
+
+def _validate(
+    chunking: dict,
+    embedding: dict,
+    bm25: dict,
+    retrieval: dict,
+    fusion: dict,
+) -> str:
+    """集中校验数值、枚举与正则参数，返回 boilerplate_pattern。
+
+    这里只做「进入运行期前就能发现」的检查，错误统一抛 FastragError：
+    避免 chunk_overlap >= chunk_size、batch_size=0、rrf_k<=0 之类的配置
+    在切块/嵌入/检索阶段才以晦涩的异常暴露。
+    """
+    if fusion["method"] not in FUSION_METHODS:
+        raise FastragError(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
+    raw_weights = fusion["weights"]
+    if not isinstance(raw_weights, list):
+        raise FastragError(f"fusion.weights 必须是数组，当前为 {raw_weights!r}")
+    weights = [
+        _number(f"fusion.weights[{index}]", weight)
+        for index, weight in enumerate(raw_weights)
+    ]
+    if len(weights) != 2:
+        raise FastragError("fusion.weights 必须包含两路权重（BM25、向量）")
+    if any(weight <= 0 for weight in weights):
+        raise FastragError(f"fusion.weights 必须全为正数，当前为 {weights}")
+    rrf_k = _number("fusion.rrf_k", fusion["rrf_k"])
+    if rrf_k <= 0:
+        raise FastragError(f"fusion.rrf_k 必须大于 0，当前为 {rrf_k!r}")
+
+    for key in ("bm25_candidates", "vector_candidates", "top_n"):
+        value = _number(f"retrieval.{key}", retrieval[key])
+        if value <= 0:
+            raise FastragError(f"retrieval.{key} 必须大于 0，当前为 {value!r}")
+
+    chunk_size = _number("chunking.chunk_size", chunking["chunk_size"])
+    chunk_overlap = _number("chunking.chunk_overlap", chunking["chunk_overlap"])
+    if chunk_size <= 0:
+        raise FastragError(f"chunking.chunk_size 必须大于 0，当前为 {chunk_size!r}")
+    if chunk_overlap < 0:
+        raise FastragError(
+            f"chunking.chunk_overlap 不能为负数，当前为 {chunk_overlap!r}"
+        )
+    if chunk_overlap >= chunk_size:
+        raise FastragError(
+            f"chunking.chunk_overlap ({chunk_overlap}) 必须小于 "
+            f"chunk_size ({chunk_size})"
+        )
+
+    batch_size = _number("embedding.batch_size", embedding["batch_size"])
+    if batch_size <= 0:
+        raise FastragError(f"embedding.batch_size 必须大于 0，当前为 {batch_size!r}")
+    dimensions = _number("embedding.dimensions", embedding["dimensions"])
+    if dimensions <= 0:
+        raise FastragError(f"embedding.dimensions 必须大于 0，当前为 {dimensions!r}")
+    timeout = _number("embedding.timeout", embedding["timeout"])
+    if timeout <= 0:
+        raise FastragError(f"embedding.timeout 必须大于 0，当前为 {timeout!r}")
+    max_retries = _number("embedding.max_retries", embedding["max_retries"])
+    if max_retries < 0:
+        raise FastragError(
+            f"embedding.max_retries 不能为负数，当前为 {max_retries!r}"
+        )
+
+    _number("bm25.min_score", bm25["min_score"])
+
+    pattern = chunking.get("boilerplate_pattern", "")
+    if pattern:
+        if not isinstance(pattern, str):
+            raise FastragError(
+                f"chunking.boilerplate_pattern 必须是字符串，当前为 {pattern!r}"
+            )
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise FastragError(
+                f"chunking.boilerplate_pattern 不是合法正则: {exc}"
+            ) from None
+    return pattern
+
+
 def load_config(path: pathlib.Path | None = None) -> Config:
     """读取并校验统一配置。
 
@@ -251,21 +339,7 @@ def load_config(path: pathlib.Path | None = None) -> Config:
     llm, reranker = raw["llm"], raw["reranker"]
     bm25, retrieval, fusion = raw["bm25"], raw["retrieval"], raw["fusion"]
 
-    if fusion["method"] not in FUSION_METHODS:
-        raise FastragError(f"fusion.method 必须是 {' / '.join(FUSION_METHODS)}")
-    if len(fusion["weights"]) != 2:
-        raise FastragError("fusion.weights 必须包含两路权重（BM25、向量）")
-    for key in ("bm25_candidates", "vector_candidates", "top_n"):
-        if retrieval[key] < 1:
-            raise FastragError(f"retrieval.{key} 必须大于 0")
-    pattern = chunking.get("boilerplate_pattern", "")
-    if pattern:
-        try:
-            re.compile(pattern)
-        except re.error as exc:
-            raise FastragError(
-                f"chunking.boilerplate_pattern 不是合法正则: {exc}"
-            ) from None
+    pattern = _validate(chunking, embedding, bm25, retrieval, fusion)
 
     return Config(
         paths=Paths(
