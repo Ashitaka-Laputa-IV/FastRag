@@ -11,9 +11,7 @@ from fastrag.index import ChunkStore, build_embeddings, ensure_vectors, search_d
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("embed", help="生成并复用向量")
-    parser.add_argument(
-        "--query", help="构建后可选地跑一次向量检索演示", default=None
-    )
+    parser.add_argument("--query", help="构建后可选地跑一次向量检索演示", default=None)
     parser.set_defaults(handler=run)
 
 
@@ -23,9 +21,7 @@ def run(args: argparse.Namespace, config: Config) -> int:
     vectors = ensure_vectors(config, store, embeddings)
     print(f"{len(store)} 个 chunk -> {vectors.shape} float32")
     if args.query:
-        hits = search_dense(
-            embeddings, vectors, store, args.query, config.retrieval.top_n
-        )
+        hits = search_dense(embeddings, vectors, store, args.query, config.retrieval.top_n)
         for line in format_hits(hits):
             print(line)
     return 0

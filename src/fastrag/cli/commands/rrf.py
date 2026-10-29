@@ -35,12 +35,8 @@ def run(args: argparse.Namespace, config: Config) -> int:
     vectors = ensure_vectors(config, store, embeddings)
     retriever = load_index(config, store)
 
-    bm25 = search_bm25(
-        retriever, store, config, args.text, config.retrieval.bm25_candidates
-    )
-    vector = search_dense(
-        embeddings, vectors, store, args.text, config.retrieval.vector_candidates
-    )
+    bm25 = search_bm25(retriever, store, config, args.text, config.retrieval.bm25_candidates)
+    vector = search_dense(embeddings, vectors, store, args.text, config.retrieval.vector_candidates)
     rankings = {"bm25": bm25, "vector": vector}
     fused = rrf_fuse(rankings, config.fusion.rrf_k, config.fusion.weights)
 
@@ -51,14 +47,9 @@ def run(args: argparse.Namespace, config: Config) -> int:
     for item in fused[:n]:
         chunk = item.chunk
         where = " / ".join(
-            f"{name} #{rank_map[chunk.id]}"
-            if chunk.id in rank_map
-            else f"{name} -"
+            f"{name} #{rank_map[chunk.id]}" if chunk.id in rank_map else f"{name} -"
             for name, rank_map in positions.items()
         )
-        print(
-            f"{item.rank}. {item.score:.4f}  "
-            f"{chunk.source}#{chunk.start}-{chunk.end}  ({where})"
-        )
+        print(f"{item.rank}. {item.score:.4f}  {chunk.source}#{chunk.start}-{chunk.end}  ({where})")
         print(f"   {snippet(chunk.text)}")
     return 0

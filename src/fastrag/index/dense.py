@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import logging
-import pathlib
 import time
 
 import numpy as np
@@ -20,6 +19,7 @@ from fastrag.errors import FastragError
 from fastrag.index.store import ChunkStore
 from fastrag.ingest.artifacts import (
     ArtifactKey,
+    matches,
     read_manifest,
     write_manifest,
     write_npy_atomic,
@@ -46,9 +46,7 @@ def build_embeddings(config: Config) -> OpenAIEmbeddings:
     )
 
 
-def embed_texts(
-    embeddings: OpenAIEmbeddings, config: Config, texts: list[str]
-) -> np.ndarray:
+def embed_texts(embeddings: OpenAIEmbeddings, config: Config, texts: list[str]) -> np.ndarray:
     """分批嵌入文本，返回 (N, dimensions) 的 float32 矩阵。"""
     dimensions = config.embedding.dimensions
     batch_size = config.embedding.batch_size
@@ -59,9 +57,7 @@ def embed_texts(
         batch = texts[start : start + batch_size]
         batch_vectors = embeddings.embed_documents(batch)
         if len(batch_vectors) != len(batch):
-            raise FastragError(
-                f"嵌入服务返回 {len(batch_vectors)} 条向量，期望 {len(batch)} 条"
-            )
+            raise FastragError(f"嵌入服务返回 {len(batch_vectors)} 条向量，期望 {len(batch)} 条")
         if len(batch_vectors[0]) != dimensions:
             raise FastragError(
                 f"返回维度 {len(batch_vectors[0])} 与配置 dimensions={dimensions} 不一致"
@@ -88,9 +84,7 @@ def _manifest_key(config: Config, store: ChunkStore) -> ArtifactKey:
     )
 
 
-def _load_previous(
-    config: Config, store: ChunkStore
-) -> tuple[np.ndarray, list[str]] | None:
+def _load_previous(config: Config) -> tuple[np.ndarray, list[str]] | None:
     """读取可复用的旧向量；模型/维度不一致或形状不匹配时返回 None。"""
     directory = config.paths.embeddings_dir
     vectors_path = directory / VECTORS_FILE
@@ -110,9 +104,61 @@ def _load_previous(
         vectors = np.load(vectors_path)
     except (OSError, ValueError):
         return None
-    if vectors.ndim != 2 or vectors.shape[0] != len(ids):
+    expected = (len(ids), config.embedding.dimensions)
+    if vectors.shape != expected:
         return None
     return vectors, [str(item) for item in ids]
+
+
+def _rebuild(config: Config, store: ChunkStore, embeddings: OpenAIEmbeddings | None) -> np.ndarray:
+    logger.info("未找到可复用向量，开始完整嵌入 ...")
+    started = time.perf_counter()
+    matrix = embed_texts(
+        embeddings or build_embeddings(config),
+        config,
+        [chunk.text for chunk in store.chunks],
+    )
+    logger.info("嵌入完成，耗时 %.1fs", time.perf_counter() - started)
+    return _normalize(matrix)
+
+
+def _reuse(
+    config: Config,
+    store: ChunkStore,
+    previous: tuple[np.ndarray, list[str]],
+    embeddings: OpenAIEmbeddings | None,
+) -> np.ndarray:
+    """按 id 复用旧向量；返回与当前语料顺序对齐的矩阵。"""
+    vectors, old_ids = previous
+    index_by_id = {chunk_id: row for row, chunk_id in enumerate(old_ids)}
+    matrix = np.zeros((len(store.chunks), config.embedding.dimensions), dtype=np.float32)
+    missing: list[int] = []
+    for row, chunk in enumerate(store.chunks):
+        old_row = index_by_id.get(chunk.id)
+        if old_row is None:
+            missing.append(row)
+        else:
+            matrix[row] = vectors[old_row]
+
+    if not missing:
+        logger.info("向量按 id 全部复用：%d 条", len(store.chunks))
+        return matrix
+
+    logger.info(
+        "增量嵌入：复用 %d 条，新增 %d 条",
+        len(store.chunks) - len(missing),
+        len(missing),
+    )
+    matrix[missing] = embed_texts(
+        embeddings or build_embeddings(config),
+        config,
+        [store.chunks[row].text for row in missing],
+    )
+    return _normalize(matrix)
+
+
+def _manifest_extra(store: ChunkStore, ids: list[str]) -> dict[str, object]:
+    return {"count": len(ids), "ids": ids, "chunks_file": str(store.path)}
 
 
 def ensure_vectors(
@@ -122,59 +168,27 @@ def ensure_vectors(
 ) -> np.ndarray:
     """加载可用向量；不可用时按 id 增量补齐或全量重建，并原子落盘。"""
     directory = config.paths.embeddings_dir
-    key = _manifest_key(config, store)
     current_ids = [chunk.id for chunk in store.chunks]
-    previous = _load_previous(config, store)
+    previous = _load_previous(config)
 
-    if previous is not None:
-        vectors, old_ids = previous
-        if old_ids == current_ids:
-            logger.info("复用已嵌入向量：%d 条", len(current_ids))
-            return vectors
-        index_by_id = {chunk_id: row for row, chunk_id in enumerate(old_ids)}
-        matrix = np.zeros(
-            (len(store.chunks), config.embedding.dimensions), dtype=np.float32
-        )
-        missing: list[int] = []
-        for row, chunk in enumerate(store.chunks):
-            old_row = index_by_id.get(chunk.id)
-            if old_row is None:
-                missing.append(row)
-            else:
-                matrix[row] = vectors[old_row]
-        if missing:
-            logger.info(
-                "增量嵌入：复用 %d 条，新增 %d 条",
-                len(store.chunks) - len(missing),
-                len(missing),
-            )
-            embedded = embed_texts(
-                embeddings or build_embeddings(config),
-                config,
-                [store.chunks[row].text for row in missing],
-            )
-            matrix[missing] = embedded
-        else:
-            logger.info("向量按 id 全部复用：%d 条", len(store.chunks))
-        matrix = _normalize(matrix)
-    else:
-        logger.info("未找到可复用向量，开始完整嵌入 ...")
-        started = time.perf_counter()
-        matrix = _normalize(
-            embed_texts(embeddings or build_embeddings(config), config,
-                        [chunk.text for chunk in store.chunks])
-        )
-        logger.info("嵌入完成，耗时 %.1fs", time.perf_counter() - started)
+    if previous is not None and previous[1] == current_ids:
+        vectors = previous[0]
+        logger.info("复用已嵌入向量：%d 条", len(current_ids))
+        key = _manifest_key(config, store)
+        if not matches(directory, key, MANIFEST_FILE):
+            write_manifest(directory, key, _manifest_extra(store, current_ids), MANIFEST_FILE)
+        return vectors
 
+    matrix = (
+        _reuse(config, store, previous, embeddings)
+        if previous is not None
+        else _rebuild(config, store, embeddings)
+    )
     write_npy_atomic(directory / VECTORS_FILE, matrix)
     write_manifest(
         directory,
-        key,
-        {
-            "count": len(current_ids),
-            "ids": current_ids,
-            "chunks_file": str(store.path),
-        },
+        _manifest_key(config, store),
+        _manifest_extra(store, current_ids),
         MANIFEST_FILE,
     )
     logger.info("向量已落盘：%s", directory / VECTORS_FILE)
@@ -193,9 +207,7 @@ def search_dense(
         return []
     query = np.asarray(embeddings.embed_query(text), dtype=np.float32)
     if query.ndim != 1 or query.shape[0] != vectors.shape[1]:
-        raise FastragError(
-            f"查询向量维度 {query.shape} 与语料向量 {vectors.shape} 不一致"
-        )
+        raise FastragError(f"查询向量维度 {query.shape} 与语料向量 {vectors.shape} 不一致")
     query = query / max(float(np.linalg.norm(query)), 1e-12)
     scores = vectors @ query
     top = np.argsort(-scores)[: min(k, len(store))]
@@ -208,7 +220,3 @@ def search_dense(
         )
         for rank, index in enumerate(top, start=1)
     ]
-
-
-def vectors_path(config: Config) -> pathlib.Path:
-    return config.paths.embeddings_dir / VECTORS_FILE

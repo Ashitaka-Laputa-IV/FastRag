@@ -20,6 +20,7 @@ from fastrag.api import (
     ask,
     load_config,
     load_env,
+    prepare,
     stream,
 )
 from fastrag.version import VERSION
@@ -37,5 +38,6 @@ __all__ = [
     "ask",
     "load_config",
     "load_env",
+    "prepare",
     "stream",
 ]

@@ -21,8 +21,8 @@ def run(args: argparse.Namespace, config: Config) -> int:
     write_chunks(config, chunks)
     info = stats(chunks)
     print(
-        f"{info['documents']:.0f} 篇文档 -> {info['chunks']:.0f} 个 chunk，"
-        f"token 数 {info['min_tokens']:.0f}~{info['max_tokens']:.0f}，"
-        f"平均 {info['avg_tokens']:.0f} token -> {config.paths.chunks_file}"
+        f"{info.documents} 篇文档 -> {info.chunks} 个 chunk，"
+        f"token 数 {info.min_tokens}~{info.max_tokens}，"
+        f"平均 {info.avg_tokens:.0f} token -> {config.paths.chunks_file}"
     )
     return 0

@@ -1,6 +1,7 @@
 """索引层：chunk 真源、向量索引、BM25 索引。"""
 
-from fastrag.index.bm25 import build_index, load_index, search as search_bm25
+from fastrag.index.bm25 import build_index, load_index
+from fastrag.index.bm25 import search as search_bm25
 from fastrag.index.dense import (
     build_embeddings,
     embed_texts,

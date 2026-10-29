@@ -48,9 +48,7 @@ def fetch(url: str, config: Config) -> bytes:
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
-            request = urllib.request.Request(
-                url, headers={"User-Agent": settings.user_agent}
-            )
+            request = urllib.request.Request(url, headers={"User-Agent": settings.user_agent})
             with urllib.request.urlopen(request, timeout=settings.timeout) as resp:
                 return resp.read()
         except urllib.error.HTTPError as exc:

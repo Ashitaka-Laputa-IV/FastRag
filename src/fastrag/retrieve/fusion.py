@@ -34,8 +34,6 @@ def rrf_fuse(
 
     ordered = sorted(scores, key=lambda key: scores[key], reverse=True)
     return [
-        ScoredChunk(
-            chunk=chunks[key], score=scores[key], channel="rrf", rank=rank
-        )
+        ScoredChunk(chunk=chunks[key], score=scores[key], channel="rrf", rank=rank)
         for rank, key in enumerate(ordered, start=1)
     ]

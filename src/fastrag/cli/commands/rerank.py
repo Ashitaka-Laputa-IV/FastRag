@@ -24,9 +24,7 @@ def run(args: argparse.Namespace, config: Config) -> int:
         return 0
     store = ChunkStore.load(config)
     retriever = load_index(config, store)
-    candidates = search_bm25(
-        retriever, store, config, args.text, config.retrieval.bm25_candidates
-    )
+    candidates = search_bm25(retriever, store, config, args.text, config.retrieval.bm25_candidates)
     hits = rerank_chunks(build_reranker(config), args.text, candidates, n)
     for line in format_hits(hits, digits=4):
         print(line)

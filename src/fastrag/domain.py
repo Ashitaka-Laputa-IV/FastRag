@@ -29,7 +29,7 @@ class Chunk:
     token_count: int = 0
 
     @classmethod
-    def from_record(cls, record: dict[str, Any]) -> "Chunk":
+    def from_record(cls, record: dict[str, Any]) -> Chunk:
         """从 JSONL 记录还原；缺字段时抛 `KeyError`，由调用方转成配置/数据错误。"""
         return cls(
             id=str(record["id"]),

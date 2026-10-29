@@ -6,7 +6,7 @@ from fastrag.llm.client import (
     build_with_fallbacks,
     extract_text,
 )
-from fastrag.llm.prompts import load_prompt, prompt_sha, render
+from fastrag.llm.prompts import load_prompt, render, render_text
 
 __all__ = [
     "EmptyResponseError",
@@ -14,6 +14,6 @@ __all__ = [
     "build_with_fallbacks",
     "extract_text",
     "load_prompt",
-    "prompt_sha",
     "render",
+    "render_text",
 ]

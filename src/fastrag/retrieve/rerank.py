@@ -22,7 +22,6 @@ def build_reranker(config: Config) -> BaseDocumentCompressor:
         base_url=config.endpoints[reranker.endpoint].base_url,
         api_key=endpoint_api_key(config, reranker.endpoint),
         timeout=reranker.timeout,
-        top_n=config.retrieval.top_n,
     )
 
 

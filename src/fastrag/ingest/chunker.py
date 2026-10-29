@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import tempfile
+from dataclasses import dataclass
 
 import tiktoken
 from chonkie import SentenceChunker
@@ -21,6 +22,17 @@ from chonkie import SentenceChunker
 from fastrag.config import Config, display_path
 from fastrag.domain import Chunk
 from fastrag.errors import FastragError
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkStats:
+    """切块结果的汇总，供 CLI / prepare 报告使用。"""
+
+    documents: int
+    chunks: int
+    min_tokens: int
+    max_tokens: int
+    avg_tokens: float
 
 
 def iter_docs(config: Config) -> list[pathlib.Path]:
@@ -34,9 +46,7 @@ def iter_docs(config: Config) -> list[pathlib.Path]:
     return sorted(docs_dir.rglob("*.md"))
 
 
-def strip_boilerplate(
-    text: str, pattern: re.Pattern[str] | None
-) -> tuple[str, int]:
+def strip_boilerplate(text: str, pattern: re.Pattern[str] | None) -> tuple[str, int]:
     """去掉文档开头的站点模板头，返回（正文, 前缀字符数）。"""
     if pattern is None:
         return text, 0
@@ -48,7 +58,7 @@ def strip_boilerplate(
 
 def chunk_id(source: str, text: str) -> str:
     """内容寻址 id：同一文档内文本不变则 id 不变，与位置无关。"""
-    digest = hashlib.sha1(f"{source}\0{text}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(f"{source}\0{text}".encode()).hexdigest()
     return digest[:16]
 
 
@@ -70,9 +80,7 @@ def build_chunks(config: Config) -> list[Chunk]:
     chunks: list[Chunk] = []
     for path in iter_docs(config):
         source = display_path(path)
-        text, offset = strip_boilerplate(
-            path.read_text(encoding="utf-8"), pattern
-        )
+        text, offset = strip_boilerplate(path.read_text(encoding="utf-8"), pattern)
         if not text.strip():
             continue
         for piece in chunker.chunk(text):
@@ -106,13 +114,12 @@ def write_chunks(config: Config, chunks: list[Chunk]) -> None:
         raise
 
 
-def stats(chunks: list[Chunk]) -> dict[str, float]:
+def stats(chunks: list[Chunk]) -> ChunkStats:
     tokens = [chunk.token_count for chunk in chunks]
-    sources = {chunk.source for chunk in chunks}
-    return {
-        "documents": len(sources),
-        "chunks": len(chunks),
-        "min_tokens": min(tokens),
-        "max_tokens": max(tokens),
-        "avg_tokens": sum(tokens) / len(tokens),
-    }
+    return ChunkStats(
+        documents=len({chunk.source for chunk in chunks}),
+        chunks=len(chunks),
+        min_tokens=min(tokens),
+        max_tokens=max(tokens),
+        avg_tokens=sum(tokens) / len(tokens),
+    )

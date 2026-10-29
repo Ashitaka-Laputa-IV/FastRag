@@ -21,8 +21,7 @@ def format_hits(hits: Sequence[ScoredChunk], digits: int = 3) -> list[str]:
     for item in hits:
         chunk = item.chunk
         lines.append(
-            f"{item.rank}. {item.score:.{digits}f}  "
-            f"{chunk.source}#{chunk.start}-{chunk.end}"
+            f"{item.rank}. {item.score:.{digits}f}  {chunk.source}#{chunk.start}-{chunk.end}"
         )
         lines.append(f"   {snippet(chunk.text)}")
     return lines

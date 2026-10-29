@@ -27,7 +27,7 @@ class RagPipeline:
         self.graph = build_graph(self.nodes)
 
     @classmethod
-    def from_config(cls, config: Config | None = None) -> "RagPipeline":
+    def from_config(cls, config: Config | None = None) -> RagPipeline:
         return cls(config or load_config())
 
     def warmup(self) -> None:
@@ -47,9 +47,7 @@ class RagPipeline:
         """同步问答，返回回答、来源与元数据。"""
         started = time.perf_counter()
         state: RagState = self.graph.invoke({"question": question})
-        return result_from_state(
-            state, self._metadata(), time.perf_counter() - started
-        )
+        return result_from_state(state, self._metadata(), time.perf_counter() - started)
 
     def stream(self, question: str) -> Iterator[AnswerEvent]:
         """流式问答：逐个 token 产出，最后产出带 `AnswerResult` 的 `done`。"""
@@ -69,9 +67,7 @@ class RagPipeline:
             state: RagState = run.output or {}
         yield AnswerEvent(
             kind="done",
-            result=result_from_state(
-                state, self._metadata(), time.perf_counter() - started
-            ),
+            result=result_from_state(state, self._metadata(), time.perf_counter() - started),
         )
 
 

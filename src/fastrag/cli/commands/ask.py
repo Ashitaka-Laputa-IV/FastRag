@@ -57,7 +57,6 @@ def run(args: argparse.Namespace, config: Config) -> int:
         except Exception as exc:  # noqa: BLE001 - 单轮外部故障不终止交互
             print()
             print(
-                f"本轮问答失败（{type(exc).__name__}: {exc}），"
-                "可以重新提问或回车退出",
+                f"本轮问答失败（{type(exc).__name__}: {exc}），可以重新提问或回车退出",
                 file=sys.stderr,
             )

@@ -10,13 +10,14 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FUSION_METHODS = ("rrf", "rerank")
-BM25_METHODS = ("lucene", "robertson", "atire", "bm25l", "bm25+")
+# 与 bm25s._infer_stopwords 支持的语言名/别名保持一致；
+# bm25s 也接受 True/False（默认/禁用），这里只支持语言名或列表，禁用请写 []。
 BM25_STOPWORDS = (
     "english",
     "en",
@@ -81,7 +82,7 @@ class Chunking(_Strict):
     boilerplate_pattern: str = ""
 
     @model_validator(mode="after")
-    def _check(self) -> "Chunking":
+    def _check(self) -> Chunking:
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError(
                 f"chunk_overlap ({self.chunk_overlap}) 必须小于 chunk_size ({self.chunk_size})"
@@ -113,13 +114,27 @@ class LLMConfig(_Strict):
     thinking: bool = True
     timeout: float = Field(default=120.0, gt=0)
     retries: int = Field(default=0, ge=0)
-    fallback: "LLMConfig | None" = None
+    fallback: LLMConfig | None = None
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
 class LLMRoles(_Strict):
     route: LLMConfig
     answer: LLMConfig
+
+
+def _iter_llm_roles(config: Config) -> Iterator[tuple[str, LLMConfig]]:
+    """按配置名遍历 route / answer 及其多级 fallback。"""
+    for label, head in (
+        ("llm.route", config.llm.route),
+        ("llm.answer", config.llm.answer),
+    ):
+        role: LLMConfig | None = head
+        name = label
+        while role is not None:
+            yield name, role
+            role = role.fallback
+            name = f"{name}.fallback"
 
 
 class Reranker(_Strict):
@@ -134,11 +149,9 @@ class BM25(_Strict):
     min_score: float = 0.0
 
     @model_validator(mode="after")
-    def _check_stopwords(self) -> "BM25":
+    def _check_stopwords(self) -> BM25:
         if isinstance(self.stopwords, str) and self.stopwords not in BM25_STOPWORDS:
-            raise ValueError(
-                f"stopwords 必须是内置语言名或字符串列表，当前为 {self.stopwords!r}"
-            )
+            raise ValueError(f"stopwords 必须是内置语言名或字符串列表，当前为 {self.stopwords!r}")
         return self
 
 
@@ -154,12 +167,10 @@ class Fusion(_Strict):
     method: Literal["rrf", "rerank"] = "rrf"
     rrf_k: int = Field(default=60, gt=0)
     # 按通道名给权重，新增检索通道时不需要改融合代码
-    weights: dict[str, float] = Field(
-        default_factory=lambda: {"bm25": 1.1, "vector": 1.0}
-    )
+    weights: dict[str, float] = Field(default_factory=lambda: {"bm25": 1.1, "vector": 1.0})
 
     @model_validator(mode="after")
-    def _check_weights(self) -> "Fusion":
+    def _check_weights(self) -> Fusion:
         if not self.weights:
             raise ValueError("weights 不能为空")
         for channel in ("bm25", "vector"):
@@ -172,9 +183,7 @@ class Fusion(_Strict):
 
 
 class Download(_Strict):
-    index_url: str = (
-        "https://docs.langchain.com/_llms/agent-development-lifecycle/build/python.txt"
-    )
+    index_url: str = "https://docs.langchain.com/_llms/agent-development-lifecycle/build/python.txt"
     base_url: str = "https://docs.langchain.com/"
     concurrency: int = Field(default=12, gt=0)
     timeout: float = Field(default=30.0, gt=0)
@@ -198,29 +207,16 @@ class Config(_Strict):
     download: Download = Field(default_factory=Download)
 
     @model_validator(mode="after")
-    def _check_endpoints(self) -> "Config":
+    def _check_endpoints(self) -> Config:
         known = set(self.endpoints)
         references: list[tuple[str, str]] = [
             ("embedding", self.embedding.endpoint),
             ("reranker", self.reranker.endpoint),
         ]
-        role: LLMConfig | None = self.llm.route
-        name = "llm.route"
-        while role is not None:
-            references.append((name, role.endpoint))
-            role = role.fallback
-            name = f"{name}.fallback"
-        role = self.llm.answer
-        name = "llm.answer"
-        while role is not None:
-            references.append((name, role.endpoint))
-            role = role.fallback
-            name = f"{name}.fallback"
+        references.extend((name, role.endpoint) for name, role in _iter_llm_roles(self))
         for owner, endpoint in references:
             if endpoint not in known:
-                raise ValueError(
-                    f"{owner}.endpoint = {endpoint!r} 未在 [endpoints] 中定义"
-                )
+                raise ValueError(f"{owner}.endpoint = {endpoint!r} 未在 [endpoints] 中定义")
         return self
 
 

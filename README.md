@@ -54,7 +54,9 @@ uv run fastrag prepare
 ## 库调用
 
 ```python
-from fastrag import ask, RagPipeline, load_config
+from fastrag import ask, prepare, RagPipeline
+
+prepare()  # 切块 -> 向量 -> BM25 索引
 
 result = ask("LangGraph 里怎么实现 human-in-the-loop？")
 print(result.answer)
@@ -117,7 +119,8 @@ API key 从 `.env` / 环境变量读取；每个 endpoint 用 `api_key_env` 指�
 
 ```text
 src/fastrag/
-  api.py               # 公共门面（ask / stream / RagPipeline）
+  api.py               # 公共门面（ask / stream / prepare / RagPipeline）
+  build.py             # prepare：切块 -> 向量 -> BM25 索引
   domain.py            # Chunk / ScoredChunk / SearchPlan / AnswerResult
   config/              # pydantic schema + TOML 加载 + .env
   ingest/              # 下载、切块、manifest 与原子写入

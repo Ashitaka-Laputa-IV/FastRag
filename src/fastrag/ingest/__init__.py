@@ -9,6 +9,7 @@ from fastrag.ingest.artifacts import (
     write_npy_atomic,
 )
 from fastrag.ingest.chunker import (
+    ChunkStats,
     build_chunks,
     chunk_id,
     iter_docs,
@@ -20,6 +21,7 @@ from fastrag.ingest.download import DownloadSummary, collect_urls, download_docs
 
 __all__ = [
     "ArtifactKey",
+    "ChunkStats",
     "DownloadSummary",
     "build_chunks",
     "chunk_id",

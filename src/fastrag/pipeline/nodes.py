@@ -11,11 +11,11 @@
 from __future__ import annotations
 
 import logging
-from string import Template
 from typing import TypedDict
 
 from fastrag.domain import AnswerResult, ScoredChunk, SearchPlan
 from fastrag.index import search_bm25, search_dense
+from fastrag.llm import render_text
 from fastrag.pipeline.resources import ResourceBundle
 from fastrag.retrieve import rerank_chunks, rrf_fuse
 
@@ -36,10 +36,6 @@ class RagState(TypedDict, total=False):
     answer: str
 
 
-def _render(prompt: str, **values: str) -> str:
-    return Template(prompt).safe_substitute(values)
-
-
 class RagNodes:
     """RAG 图节点的实现。"""
 
@@ -49,15 +45,11 @@ class RagNodes:
 
     def plan_search(self, state: RagState) -> dict:
         """一次调用同时判断是否检索，并给出两路各自的查询。"""
-        prompt = _render(
-            self.resources.prompts["search_plan"], question=state["question"]
-        )
+        prompt = render_text(self.resources.prompts["search_plan"], question=state["question"])
         try:
             plan = self.resources.plan_chain.invoke(prompt)
         except Exception as exc:  # noqa: BLE001 - 路由不可用时仍要保证可检索
-            return self._degrade_route(
-                state, f"路由模型全部失败（{type(exc).__name__}: {exc}）"
-            )
+            return self._degrade_route(state, f"路由模型全部失败（{type(exc).__name__}: {exc}）")
         if plan is None:
             return self._degrade_route(state, "路由模型返回空结果")
         if not plan.need_search:
@@ -125,9 +117,7 @@ class RagNodes:
                     self.config.retrieval.top_n,
                 )
             except Exception as exc:  # noqa: BLE001 - 外部服务失败时保可用性
-                logger.warning(
-                    "重排失败（%s: %s），降级为 RRF", type(exc).__name__, exc
-                )
+                logger.warning("重排失败（%s: %s），降级为 RRF", type(exc).__name__, exc)
                 return {"fused": self._fuse_rrf(rankings)}
             return {"fused": fused}
 
@@ -140,21 +130,16 @@ class RagNodes:
     def answer(self, state: RagState) -> dict:
         """按是否需要检索选择提示词，再让 LLM 作答。"""
         if state.get("need_search", True):
-            limit = (
-                self.config.retrieval.context_chunks
-                or self.config.retrieval.top_n
-            )
+            limit = self.config.retrieval.context_chunks or self.config.retrieval.top_n
             chunks = state.get("fused", [])[:limit]
             context = self._context(chunks)
-            prompt = _render(
+            prompt = render_text(
                 self.resources.prompts["answer"],
                 context=context,
                 question=state["question"],
             )
         else:
-            prompt = _render(
-                self.resources.prompts["chat"], question=state["question"]
-            )
+            prompt = render_text(self.resources.prompts["chat"], question=state["question"])
         return {"answer": self._answer_text(prompt)}
 
     @staticmethod
@@ -198,9 +183,7 @@ class RagNodes:
         return ["retrieve_bm25", "retrieve_vector"]
 
 
-def result_from_state(
-    state: RagState, metadata: dict, elapsed: float
-) -> AnswerResult:
+def result_from_state(state: RagState, metadata: dict, elapsed: float) -> AnswerResult:
     """把图状态转成库层返回类型。"""
     sources = tuple(state.get("fused") or ())
     plan = state.get("plan")

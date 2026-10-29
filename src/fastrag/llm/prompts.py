@@ -7,7 +7,6 @@ JSON 示例或代码片段里的字面量花括号时报错。用户可用
 
 from __future__ import annotations
 
-import hashlib
 import importlib.resources
 from string import Template
 
@@ -15,7 +14,6 @@ from fastrag.config import home
 from fastrag.errors import FastragError
 
 PACKAGE_RESOURCES = importlib.resources.files("fastrag.resources")
-REQUIRED = ("search_plan", "answer", "chat")
 
 
 def load_prompt(name: str) -> str:
@@ -32,11 +30,11 @@ def load_prompt(name: str) -> str:
     return resource.read_text(encoding="utf-8")
 
 
+def render_text(template: str, **values: str) -> str:
+    """用 `$name` 占位符渲染模板；未知占位符原样保留。"""
+    return Template(template).safe_substitute(values)
+
+
 def render(name: str, **values: str) -> str:
-    """用 `$name` 占位符渲染模板；未知占位符原样保留，避免静默丢内容。"""
-    return Template(load_prompt(name)).safe_substitute(values)
-
-
-def prompt_sha(name: str) -> str:
-    """提示词内容指纹，用于回答元数据与实验复现。"""
-    return hashlib.sha256(load_prompt(name).encode("utf-8")).hexdigest()[:12]
+    """读取并渲染提示词。"""
+    return render_text(load_prompt(name), **values)

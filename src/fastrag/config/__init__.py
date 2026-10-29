@@ -12,7 +12,6 @@ from fastrag.config.loader import (
 )
 from fastrag.config.models import (
     BM25,
-    BM25_METHODS,
     BM25_STOPWORDS,
     Chunking,
     Config,
@@ -29,7 +28,6 @@ from fastrag.config.models import (
 
 __all__ = [
     "BM25",
-    "BM25_METHODS",
     "BM25_STOPWORDS",
     "Chunking",
     "Config",
