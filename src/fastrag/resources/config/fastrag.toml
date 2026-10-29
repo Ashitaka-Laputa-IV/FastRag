@@ -91,9 +91,18 @@ min_score = 0.0        # 只保留分数大于该值的命中，默认去掉零�
 [retrieval]
 bm25_candidates = 20   # BM25 召回条数
 vector_candidates = 20 # 向量召回条数
-top_n = 5              # 最终送入 LLM 的片段数，也是各命令行工具的默认返回条数
+top_n = 5              # 最终送入融合结果的条数，也是各命令行工具的默认返回条数
+context_chunks = 5     # 实际拼进回答提示词的片段数（与 top_n 解耦）
 
 [fusion]
 method = "rrf"       # 融合排序方式：rrf | rerank
 rrf_k = 60           # method=rrf 时的平滑常数：score = Σ w / (rrf_k + rank)
-weights = [1.1, 1.0] # 两路权重（BM25、向量），BM25 略高
+# 按通道名给权重，新增检索通道时无需改融合代码
+weights = { bm25 = 1.1, vector = 1.0 }
+
+[download]
+index_url = "https://docs.langchain.com/_llms/agent-development-lifecycle/build/python.txt"
+base_url = "https://docs.langchain.com/"
+concurrency = 12     # 并发下载数
+timeout = 30         # 单请求超时（秒）
+retries = 3          # 只对超时/429/5xx 等瞬时错误重试

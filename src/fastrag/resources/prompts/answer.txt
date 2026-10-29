@@ -1,7 +1,7 @@
 请依据下面的资料回答问题，资料不足时直接说明，不要编造。
 
 资料:
-{context}
+$context
 
-问题: {question}
+问题: $question
 回答:

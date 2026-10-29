@@ -1,0 +1,53 @@
+"""配置包：对外暴露模型与加载入口。"""
+
+from fastrag.config.loader import (
+    ConfigRef,
+    default_config_ref,
+    display_path,
+    endpoint_api_key,
+    home,
+    load_config,
+    load_env,
+    resolve_config,
+)
+from fastrag.config.models import (
+    BM25,
+    BM25_METHODS,
+    BM25_STOPWORDS,
+    Chunking,
+    Config,
+    Download,
+    Embedding,
+    Endpoint,
+    Fusion,
+    LLMConfig,
+    LLMRoles,
+    Paths,
+    Reranker,
+    Retrieval,
+)
+
+__all__ = [
+    "BM25",
+    "BM25_METHODS",
+    "BM25_STOPWORDS",
+    "Chunking",
+    "Config",
+    "ConfigRef",
+    "Download",
+    "Embedding",
+    "Endpoint",
+    "Fusion",
+    "LLMConfig",
+    "LLMRoles",
+    "Paths",
+    "Reranker",
+    "Retrieval",
+    "default_config_ref",
+    "display_path",
+    "endpoint_api_key",
+    "home",
+    "load_config",
+    "load_env",
+    "resolve_config",
+]
