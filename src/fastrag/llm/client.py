@@ -17,7 +17,6 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 
 from fastrag.config import Config, LLMConfig, endpoint_api_key
-from fastrag.errors import FastragError
 
 
 class EmptyResponseError(RuntimeError):
@@ -53,7 +52,6 @@ def extract_text(message: BaseMessage) -> str:
 
 def build_with_fallbacks(
     build: Callable[[LLMConfig], Runnable],
-    config: Config,
     role: LLMConfig,
 ) -> Runnable:
     """按 fallback 链逐级兜底；重试由各模型客户端的 `max_retries` 负责。"""
@@ -64,18 +62,3 @@ def build_with_fallbacks(
         fallbacks.append(build(fallback))
         fallback = fallback.fallback
     return chain.with_fallbacks(fallbacks) if fallbacks else chain
-
-
-def ask(config: Config, role: LLMConfig, question: str) -> str:
-    """发一次单轮提问，返回文本回答。"""
-    chain = build_with_fallbacks(
-        lambda item: build_llm(item, config) | extract_text,
-        config,
-        role,
-    )
-    try:
-        return chain.invoke(question)
-    except Exception as exc:  # noqa: BLE001 - 库层统一转成 FastragError
-        raise FastragError(
-            f"调用模型失败（{type(exc).__name__}: {exc}）"
-        ) from None

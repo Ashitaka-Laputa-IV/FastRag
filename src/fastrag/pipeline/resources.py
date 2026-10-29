@@ -59,7 +59,6 @@ class ResourceBundle:
             lambda role: build_llm(role, self.config).with_structured_output(
                 SearchPlan
             ),
-            self.config,
             self.config.llm.route,
         )
 
@@ -67,7 +66,6 @@ class ResourceBundle:
     def answer_chain(self) -> Runnable:
         return build_with_fallbacks(
             lambda role: build_llm(role, self.config) | extract_text,
-            self.config,
             self.config.llm.answer,
         )
 
