@@ -14,8 +14,9 @@ import logging
 from string import Template
 from typing import TypedDict
 
-from fastrag.domain import AnswerResult, ScoredChunk
+from fastrag.domain import AnswerResult, ScoredChunk, SearchPlan
 from fastrag.index import search_bm25, search_dense
+from fastrag.pipeline.resources import ResourceBundle
 from fastrag.retrieve import rerank_chunks, rrf_fuse
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class RagState(TypedDict, total=False):
     """图状态：问题、检索计划、两路召回、融合结果、回答。"""
 
     question: str
-    plan: object
+    plan: SearchPlan | None
     need_search: bool
     bm25_query: str
     vector_query: str
@@ -42,8 +43,8 @@ def _render(prompt: str, **values: str) -> str:
 class RagNodes:
     """RAG 图节点的实现。"""
 
-    def __init__(self, resources) -> None:
-        self.resources = resources
+    def __init__(self, resources: ResourceBundle) -> None:
+        self.resources: ResourceBundle = resources
         self.config = resources.config
 
     def plan_search(self, state: RagState) -> dict:
@@ -213,6 +214,6 @@ def result_from_state(
     return AnswerResult(
         answer=state.get("answer") or "",
         sources=sources,
-        plan=plan if plan is not None else None,
+        plan=plan,
         metadata=merged_metadata,
     )
