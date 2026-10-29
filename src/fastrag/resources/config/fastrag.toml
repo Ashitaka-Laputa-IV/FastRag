@@ -46,12 +46,16 @@ max_retries = 3
 
 # 判断检索并生成两路查询 / 生成回答可以分别配置模型、厂家与温度。
 # thinking=true 沿用厂家默认；推理模型可设为 false 关闭思考，首 token 直接是正文。
+# timeout 是单次请求超时（秒），每次重试独立计时。
+# retries 直接传给客户端（max_retries）：SDK 只对超时/限流/5xx 等
+# 瞬时错误做指数退避，实际请求次数为 1 + retries。
 [llm.route]
 endpoint = "siliconflow"
 model = "deepseek-ai/DeepSeek-V4.1-Flash"
 provider = "openai"  # init_chat_model 的 model_provider
 temperature = 0.7
 thinking = true
+timeout = 120
 retries = 1  # 路由模型失败后的重试次数
 
 [llm.answer]
@@ -60,15 +64,18 @@ model = "deepseek-ai/DeepSeek-V4.1-Flash"
 provider = "openai"
 temperature = 0.7
 thinking = true
+timeout = 120
 retries = 1  # 主模型失败后的重试次数
 
-# 重试耗尽后改用的备用模型；不需要时删掉本节即可。
+# 重试耗尽后改用的备用模型；可继续嵌套 [llm.answer.fallback.fallback]。
+# 不需要时删掉本节即可。
 [llm.answer.fallback]
 endpoint = "local"
 model = "qwen3-4b-instruct"
 provider = "openai"
 temperature = 0.7
 thinking = false
+timeout = 300
 retries = 0
 
 [reranker]

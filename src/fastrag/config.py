@@ -147,8 +147,10 @@ class LLMConfig:
 
     thinking 只对推理模型有意义：True 用厂家默认（通常开启），
     False 时下发 enable_thinking=false 关掉思考，首 token 直接是回答正文。
-    retries 是主模型失败后的重试次数；重试耗尽后若配置了 fallback，
-    则改用备用模型（fallback 自身也可以带 retries）。
+    timeout 是单次请求的超时（秒），每次重试独立计时。
+    retries 直接作为客户端 SDK 的 max_retries，只对瞬时错误生效；
+    重试耗尽后若配置了 fallback，则逐级改用备用模型
+    （fallback 自身也可以带 retries / fallback）。
     """
 
     endpoint: EndpointConfig
@@ -156,6 +158,7 @@ class LLMConfig:
     provider: str
     temperature: float
     thinking: bool = True
+    timeout: float = 120.0
     retries: int = 0
     fallback: "LLMConfig | None" = None
 
@@ -288,6 +291,7 @@ def _llm(
         provider=role["provider"],
         temperature=role["temperature"],
         thinking=role.get("thinking", True),
+        timeout=role.get("timeout", 120.0),
         retries=retries,
         fallback=(
             _llm(fallback, endpoints, f"{name}.fallback") if fallback else None
@@ -303,11 +307,16 @@ def _number(owner: str, value: object) -> float:
 
 
 def _validate_llm_role(role: dict, name: str) -> None:
-    """校验一个 LLM 角色（含递归的 fallback）的温度等参数。"""
+    """校验一个 LLM 角色（含递归的 fallback）的温度、超时等参数。"""
     temperature = _number(f"llm.{name}.temperature", role.get("temperature"))
     if not 0 <= temperature <= 2:
         raise FastragError(
             f"llm.{name}.temperature 必须在 0~2 之间，当前为 {temperature!r}"
+        )
+    timeout = _number(f"llm.{name}.timeout", role.get("timeout", 120.0))
+    if timeout <= 0:
+        raise FastragError(
+            f"llm.{name}.timeout 必须大于 0，当前为 {timeout!r}"
         )
     fallback = role.get("fallback")
     if fallback:
