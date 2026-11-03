@@ -1,6 +1,8 @@
 # FastRag 最小代码量改造建议
 
-- 前置阅读：`review/2026-11-03-duplication-and-langchain-ecosystem.md`（重复率与生态比对）
+- 前置阅读：
+  - `review/2026-11-03-duplication-and-langchain-ecosystem.md`（重复率与生态比对）
+  - `review/2026-11-03-third-party-replacement-review.md`（第三方库替代与依赖预算）
 - 本文目标：在**功能可用**的前提下，把代码量压到尽可能小，并建立“防止再次膨胀”的约束
 - 现状：`42` 个 Python 文件、`2662` 行（`dev@90d3673`）
 - 建议目标：**10–11 个文件、约 1,000 行**（推荐档）；如果愿意砍功能，可到 **600–800 行**
