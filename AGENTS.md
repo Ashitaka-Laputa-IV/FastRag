@@ -37,11 +37,16 @@ FastRag is a Python 3.13 hybrid retrieval library and CLI: BM25 + dense vectors,
 - Prefer `fastrag prepare`. After a corpus change vectors are incremental, but BM25 must be rebuilt. `data/`, `dist/`, and `.env` are gitignored.
 - BM25 `stopwords` accepts a supported language name or a list (`[]` disables); `min_score` filters with a strict `score > min_score`.
 
-## 提交与 PR 流程（Ashitaka-Bot App）
+## 提交与推送流程
 
-代码改动一律以 GitHub App `Ashitaka-Bot`（App ID `5467534`，installation `175142757`）的身份提交，再向 `dev` 发 PR，由号主 `Ashitaka-Laputa-IV` 审阅并合并。`main` 只接收来自 `dev` 的合并。
+代码改动直接以号主 `Ashitaka-Laputa-IV <Ashitaka-Laputa-IV@outlook.com>`（仓库已配置好 `user.name` / `user.email`）身份提交，默认提交并推送到 `dev`。`main` 只接收来自 `dev` 的合并。
 
-本机工具（不在仓库内，私钥不进版本库）：
+- 默认流程：在当前分支提交后直接 `git push origin dev`，不自动建分支、不自动开 PR。
+- **没说 PR 就不要创建 PR**：只有用户明确要求时才建 `<类型>/<主题>` 分支并开 PR。
+- 提交信息用中文、带前缀（`feat:`、`fix:`、`perf:`、`refactor:`、`docs:`、`chore:`）。
+- 中文提交信息用 `git commit -F msg.txt` 从文件读，避免在命令行里被拆开。
+
+需要 PR 时才会用到 GitHub App `Ashitaka-Bot`（App ID `5467534`，installation `175142757`）的本机工具（不在仓库内，私钥不进版本库）：
 
 - 私钥：`C:\Users\Ashit\.config\ashitaka-bot\private-key.pem`
 - 工具：`C:\Users\Ashit\.config\ashitaka-bot\bot.py`（venv 在其同目录 `.venv`）
@@ -49,18 +54,13 @@ FastRag is a Python 3.13 hybrid retrieval library and CLI: BM25 + dense vectors,
 
 ```bash
 $BOT whoami                     # 确认 App 与 installation
-$BOT token                      # 打印 installation token（约 1 小时，带缓存）
-$BOT commit -F msg.txt          # 以 bot 身份 commit（作者与提交者都是 bot）
-git push -u origin HEAD         # 走仓库 credential helper，自动用 bot token 认证
 $BOT pr create --title-file t.txt --body-file b.txt --head <分支> --base dev
 $BOT pr comment <编号> --body-file note.txt
 $BOT api GET /repos/Ashitaka-Laputa-IV/FastRag/pulls/29
 ```
 
-- bot 身份固定为 `Ashitaka-Bot[bot] <347842854+ashitaka-bot[bot]@users.noreply.github.com>`；不要用号主的 `user.name` 提交 bot 分支。
 - 仓库 `.git/config` 里的 `credential.helper` 已指向 `bot.py credential`（并用空值重置，压住全局的 gh/manager 凭据），`git push` 不需要手填 token；新克隆在该仓库根目录跑一次 `$BOT setup` 即可恢复。
-- 分支命名沿用 `<类型>/<主题>`（`feat/`、`fix/`、`perf/`、`refactor/`、`docs/`、`chore/`），PR 标题用中文、带同一前缀。
-- PR 正文与提交信息用 `-F/--body-file/--title-file` 从文件读，避免中文与空格在命令行里被拆开。
+- PR 标题与正文用中文、带同一前缀；正文用 `-F/--body-file/--title-file` 从文件读。
 - 换机器或私钥轮换：在 App 设置里重新生成私钥，放到上述路径，跑一次 `$BOT whoami` 验证。
 
 ## Conventions
