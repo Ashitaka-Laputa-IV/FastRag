@@ -105,7 +105,9 @@ def search(
         return []
     threshold = config.bm25.min_score if min_score is None else min_score
     hits: list[ScoredChunk] = []
-    for index, (score, raw) in enumerate(zip(scores[0], results[0]), start=1):
+    for index, (score, raw) in enumerate(
+        zip(scores[0], results[0], strict=False), start=1
+    ):
         if float(score) <= threshold:
             continue
         if isinstance(raw, dict):

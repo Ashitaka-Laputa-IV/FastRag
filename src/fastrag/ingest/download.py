@@ -9,17 +9,16 @@
 from __future__ import annotations
 
 import concurrent.futures as cf
-import os
 import pathlib
 import re
-import tempfile
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
+
+import httpx
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
 
 from fastrag.config import Config
 from fastrag.errors import FastragError
+from fastrag.ingest.artifacts import write_atomic
 
 HTML_PREFIXES = (b"<!doctype", b"<html")
 RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
@@ -41,27 +40,44 @@ class DownloadSummary:
         return self.succeeded + len(self.failed)
 
 
+def _is_transient(exc: BaseException) -> bool:
+    """超时、连接错误与 408/429/5xx 可重试；404/403 直接失败。"""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRY_STATUS
+    return isinstance(exc, httpx.TransportError)
+
+
 def fetch(url: str, config: Config) -> bytes:
     """带重试地抓取 URL；只对瞬时错误退避重试。"""
     settings = config.download
     attempts = settings.retries + 1
-    last_error: Exception | None = None
-    for attempt in range(attempts):
+    retrying = Retrying(
+        retry=retry_if_exception(_is_transient),
+        stop=stop_after_attempt(attempts),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    with httpx.Client(
+        timeout=settings.timeout,
+        follow_redirects=True,
+        headers={"User-Agent": settings.user_agent},
+    ) as client:
+
+        def attempt() -> bytes:
+            response = client.get(url)
+            response.raise_for_status()
+            return response.content
+
         try:
-            request = urllib.request.Request(
-                url, headers={"User-Agent": settings.user_agent}
-            )
-            with urllib.request.urlopen(request, timeout=settings.timeout) as resp:
-                return resp.read()
-        except urllib.error.HTTPError as exc:
-            if exc.code not in RETRY_STATUS:
-                raise FastragError(f"下载失败 HTTP {exc.code}: {url}") from None
-            last_error = exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last_error = exc
-        if attempt + 1 < attempts:
-            time.sleep(1 + attempt)
-    raise FastragError(f"下载失败（重试 {attempts} 次）: {url}: {last_error}")
+            return retrying(attempt)
+        except httpx.HTTPStatusError as exc:
+            raise FastragError(
+                f"下载失败 HTTP {exc.response.status_code}: {url}"
+            ) from None
+        except httpx.HTTPError as exc:
+            raise FastragError(
+                f"下载失败（重试 {attempts} 次）: {url}: {exc}"
+            ) from None
 
 
 def collect_urls(config: Config) -> list[str]:
@@ -105,14 +121,7 @@ def download(url: str, out_dir: pathlib.Path, config: Config) -> int:
         raise FastragError("返回内容不是 markdown（可能是 HTML 页面或空响应）")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp = tempfile.mkstemp(prefix=f".{dest.name}.", dir=dest.parent)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(content)
-        os.replace(temp, dest)
-    except BaseException:
-        pathlib.Path(temp).unlink(missing_ok=True)
-        raise
+    write_atomic(dest, content)
     return len(content)
 
 

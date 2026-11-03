@@ -10,7 +10,7 @@ FastRag is a Python 3.13 hybrid retrieval library and CLI: BM25 + dense vectors,
 - Inspect/debug: `uv run fastrag search "..." -k 5`, `rerank "..." -n 5`, `rrf "..." -n 5`, `embed --query "..."`, `ask`.
 - All-local profile: `uv run fastrag --config local prepare` / `ask`. It expects llama.cpp on 9931 (embeddings) and 9938 (LLM), stores vectors in `data/embeddings-bge-m3`, and needs `NO_PROXY=127.0.0.1,localhost` behind a SOCKS proxy.
 - Global flags `--config`, `-v`, `--version` may appear before or after the subcommand.
-- There is no test suite, CI, linter, or formatter config. Verify behavior with the relevant CLI command; don't assume `pytest` or `ruff` exists.
+- `uv run pytest -q` runs the unit tests; `uv run ruff check src tests` lints. Keep both clean and still verify behavior with the relevant CLI command.
 
 ## Architecture
 
@@ -25,15 +25,15 @@ FastRag is a Python 3.13 hybrid retrieval library and CLI: BM25 + dense vectors,
 - There is one TOML. Pydantic uses `extra="forbid"`, so typos and invalid values fail at load. Add fields in `config/models.py`; resolution and `.env` loading live in `config/loader.py`.
 - Resolution: `--config` path/name > `FASTRAG_CONFIG` > `$FASTRAG_HOME/config/fastrag.toml` > packaged `src/fastrag/resources/config/fastrag.toml`; `--config default` means the normal chain. `FASTRAG_HOME` defaults to the repo root (editable) or current directory (wheel); relative paths and `.env` resolve under it.
 - `load_config()` never reads `.env`; call `load_env()` explicitly when needed. The CLI and `fastrag.ask/stream` already do.
-- Prompts live in `src/fastrag/resources/prompts/` and can be overridden by `$FASTRAG_HOME/prompts/`. They use `string.Template` `$name` placeholders, not `str.format`; unknown placeholders are left intact.
-- Endpoints are OpenAI-compatible. Keep `provider = "openai"` for them; an empty `api_key_env` means a local service (placeholder key `local`). `thinking = false` adds `enable_thinking = false`, and `extra_body` is merged into the request.
+- Prompts live in `src/fastrag/resources/prompts/` and can be overridden by `$FASTRAG_HOME/prompts/`. They are `PromptTemplate`s with mustache `{{name}}` placeholders; `render_prompt` raises if a value is missing.
+- Endpoints are OpenAI-compatible. Keep `provider = "openai"` for them; `init_chat_model` picks the client and can mix providers later. An empty `api_key_env` means a local service (placeholder key `local`). `thinking = false` adds `enable_thinking = false`, and `extra_body` is merged into the request.
 - `retrieval.top_n` is the CLI default and ranking cutoff; optional `retrieval.context_chunks` controls how many chunks enter the answer prompt.
 
 ## Data artifacts
 
 - `data/chunks.jsonl` is the single source of truth. Chunk ids are content-addressed (`sha1(source + "\0" + text)[:16]`), `source` is relative to `FASTRAG_HOME`, and `text == original[start:end]`.
 - `ChunkStore.load` computes the full-file sha256. Embedding and BM25 manifests (`manifest.json` / `meta.json`) use `ArtifactKey(kind, source_digest, params)`.
-- Vectors are normalized float32 and reused per chunk id; only new/changed ids are re-embedded, and a model/dimension change forces a full rebuild. BM25 stores only ids and resolves through `ChunkStore`; it raises if the digest or `[bm25]` params changed. All artifacts are written atomically (temp file + rename).
+- Vectors live in an `InMemoryVectorStore` dumped to `vector_store.json` and are reused per chunk id; only new/changed ids are re-embedded, and a model/dimension change forces a full rebuild. Dense search uses that store (cosine). BM25 stores only ids and resolves through `ChunkStore`; it raises if the digest or `[bm25]` params changed. All artifacts are written atomically (temp file + rename).
 - Prefer `fastrag prepare`. After a corpus change vectors are incremental, but BM25 must be rebuilt. `data/`, `dist/`, and `.env` are gitignored.
 - BM25 `stopwords` accepts a supported language name or a list (`[]` disables); `min_score` filters with a strict `score > min_score`.
 

@@ -1,7 +1,8 @@
 """提示词读取与渲染。
 
-模板使用 `string.Template` 的 `$name` 占位符，避免 `str.format` 遇到
-JSON 示例或代码片段里的字面量花括号时报错。用户可用
+模板使用 langchain-core 的 `PromptTemplate`（mustache：`{{name}}`），
+`PromptTemplate` 负责占位符校验与渲染；mustache 不会把 JSON 示例或代码
+片段里的字面量花括号当成占位符。用户可用
 `$FASTRAG_HOME/prompts/<name>.txt` 覆盖包内模板。
 """
 
@@ -9,7 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib.resources
-from string import Template
+
+from langchain_core.prompts import PromptTemplate
 
 from fastrag.config import home
 from fastrag.errors import FastragError
@@ -32,9 +34,22 @@ def load_prompt(name: str) -> str:
     return resource.read_text(encoding="utf-8")
 
 
+def build_template(name: str) -> PromptTemplate:
+    """按名称构造提示词模板。"""
+    return PromptTemplate.from_template(load_prompt(name), template_format="mustache")
+
+
+def render_prompt(template: PromptTemplate, name: str, **values: str) -> str:
+    """渲染已加载的模板；缺少占位符取值时直接报错，避免静默丢内容。"""
+    missing = [var for var in template.input_variables if var not in values]
+    if missing:
+        raise FastragError(f"提示词 {name} 缺少取值: {', '.join(missing)}")
+    return template.format(**values)
+
+
 def render(name: str, **values: str) -> str:
-    """用 `$name` 占位符渲染模板；未知占位符原样保留，避免静默丢内容。"""
-    return Template(load_prompt(name)).safe_substitute(values)
+    """按名称加载并渲染模板。"""
+    return render_prompt(build_template(name), name, **values)
 
 
 def prompt_sha(name: str) -> str:

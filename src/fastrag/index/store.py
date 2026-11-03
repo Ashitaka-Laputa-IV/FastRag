@@ -11,9 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import pathlib
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Iterator, Mapping
 
 from fastrag.config import Config
 from fastrag.domain import Chunk
@@ -60,7 +60,7 @@ class ChunkStore:
         return self.by_id.get(chunk_id)
 
     @classmethod
-    def load(cls, config: Config) -> "ChunkStore":
+    def load(cls, config: Config) -> ChunkStore:
         path = config.paths.chunks_file
         digest = file_sha256(path)
         chunks: list[Chunk] = []
@@ -71,7 +71,12 @@ class ChunkStore:
                         continue
                     try:
                         chunks.append(Chunk.from_record(json.loads(line)))
-                    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                    except (
+                        json.JSONDecodeError,
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                    ) as exc:
                         raise FastragError(
                             f"chunk 语料第 {number} 行格式错误: {path}: {exc}"
                         ) from None

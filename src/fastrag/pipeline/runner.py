@@ -27,7 +27,7 @@ class RagPipeline:
         self.graph = build_graph(self.nodes)
 
     @classmethod
-    def from_config(cls, config: Config | None = None) -> "RagPipeline":
+    def from_config(cls, config: Config | None = None) -> RagPipeline:
         return cls(config or load_config())
 
     def warmup(self) -> None:

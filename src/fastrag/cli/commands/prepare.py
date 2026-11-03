@@ -7,7 +7,7 @@ import time
 
 from fastrag.cli.commands import chunk as chunk_command
 from fastrag.config import Config
-from fastrag.index import ChunkStore, build_index, ensure_vectors
+from fastrag.index import ChunkStore, build_index, ensure_vector_store
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -25,7 +25,7 @@ def run(args: argparse.Namespace, config: Config) -> int:
 
     print("[2/3] 嵌入向量")
     store = ChunkStore.load(config)
-    ensure_vectors(config, store)
+    ensure_vector_store(config, store)
 
     print("[3/3] BM25 索引")
     build_index(config, store)
