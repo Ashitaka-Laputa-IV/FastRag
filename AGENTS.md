@@ -67,4 +67,3 @@ $BOT api GET /repos/Ashitaka-Laputa-IV/FastRag/pulls/29
 
 - `.gitattributes` enforces LF; don't introduce CRLF.
 - `opencode.json` configures the LangChain docs/reference MCP servers; use them for API questions.
-- `bot-reviews/` is historical review material, not current instructions.
