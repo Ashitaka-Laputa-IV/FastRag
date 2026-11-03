@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
 import tempfile
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
-
-import numpy as np
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +43,9 @@ def read_manifest(directory: pathlib.Path, name: str = "manifest.json") -> dict 
         return None
 
 
-def matches(directory: pathlib.Path, key: ArtifactKey, name: str = "manifest.json") -> bool:
+def matches(
+    directory: pathlib.Path, key: ArtifactKey, name: str = "manifest.json"
+) -> bool:
     manifest = read_manifest(directory, name)
     if manifest is None:
         return False
@@ -54,18 +56,33 @@ def matches(directory: pathlib.Path, key: ArtifactKey, name: str = "manifest.jso
     )
 
 
-def write_json_atomic(path: pathlib.Path, data: Mapping[str, Any]) -> None:
-    """先写同目录临时文件再 rename，避免半截 JSON。"""
+@contextlib.contextmanager
+def atomic_path(path: pathlib.Path, suffix: str = "") -> Iterator[pathlib.Path]:
+    """在目标目录建临时文件，正常退出时原子替换目标；失败则清理。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    fd, temp = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=suffix, dir=path.parent
+    )
+    os.close(fd)
+    temp_path = pathlib.Path(temp)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-            fh.write("\n")
-        os.replace(temp, path)
+        yield temp_path
+        os.replace(temp_path, path)
     except BaseException:
-        pathlib.Path(temp).unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
         raise
+
+
+def write_atomic(path: pathlib.Path, data: bytes) -> None:
+    """先写同目录临时文件再 rename，避免崩溃留下半截文件。"""
+    with atomic_path(path) as temp:
+        temp.write_bytes(data)
+
+
+def write_json_atomic(path: pathlib.Path, data: Mapping[str, Any]) -> None:
+    """原子写 JSON（含行尾换行）。"""
+    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    write_atomic(path, text.encode("utf-8"))
 
 
 def write_manifest(
@@ -78,17 +95,3 @@ def write_manifest(
     if extra:
         payload.update(extra)
     write_json_atomic(directory / name, payload)
-
-
-def write_npy_atomic(path: pathlib.Path, array: np.ndarray) -> None:
-    """先写临时 `.npy` 再 rename，避免崩溃留下半截矩阵。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".npy", dir=path.parent)
-    os.close(fd)
-    try:
-        with open(temp, "wb") as fh:
-            np.save(fh, array)
-        os.replace(temp, path)
-    except BaseException:
-        pathlib.Path(temp).unlink(missing_ok=True)
-        raise

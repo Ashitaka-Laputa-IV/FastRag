@@ -18,6 +18,15 @@ uv build
 uv pip install dist/fastrag-0.2.0-py3-none-any.whl
 ```
 
+## 开发
+
+```bash
+uv run pytest -q
+uv run ruff check src tests
+```
+
+`pytest` 与 `ruff` 在 `dev` 依赖组里，`uv sync` 时一并安装。
+
 ## 命令行
 
 | 子命令 | 作用 |
@@ -47,7 +56,8 @@ uv run fastrag prepare
 
 三份产物用 `chunks.jsonl` 的全字节 sha256 互相校验：
 
-- 向量按 chunk id 增量复用：只嵌入新增或内容变化的块；
+- 向量由 `InMemoryVectorStore` 落盘为 `vector_store.json`，按 chunk id 增量复用：
+  只嵌入新增或内容变化的块；
 - BM25 索引检测到语料或 `[bm25]` 参数变化时提示重建；
 - 写向量与 manifest 都采用「临时文件 + 原子 rename」。
 
@@ -122,7 +132,7 @@ src/fastrag/
   config/              # pydantic schema + TOML 加载 + .env
   ingest/              # 下载、切块、manifest 与原子写入
   index/               # ChunkStore、向量索引、BM25 索引
-  retrieve/            # RRF 融合、cross-encoder 重排
+  retrieve/            # 混合召回编排、RRF 融合、cross-encoder 重排
   llm/                 # 客户端、fallback、提示词
   pipeline/            # 资源懒加载、图节点、StateGraph、对外 runner
   cli/                 # argparse 入口与各子命令

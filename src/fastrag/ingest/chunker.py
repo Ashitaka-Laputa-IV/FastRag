@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import pathlib
 import re
-import tempfile
 
 import tiktoken
 from chonkie import SentenceChunker
@@ -21,6 +19,7 @@ from chonkie import SentenceChunker
 from fastrag.config import Config, display_path
 from fastrag.domain import Chunk
 from fastrag.errors import FastragError
+from fastrag.ingest.artifacts import write_atomic
 
 
 def iter_docs(config: Config) -> list[pathlib.Path]:
@@ -48,7 +47,7 @@ def strip_boilerplate(
 
 def chunk_id(source: str, text: str) -> str:
     """内容寻址 id：同一文档内文本不变则 id 不变，与位置无关。"""
-    digest = hashlib.sha1(f"{source}\0{text}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(f"{source}\0{text}".encode()).hexdigest()
     return digest[:16]
 
 
@@ -93,17 +92,10 @@ def build_chunks(config: Config) -> list[Chunk]:
 
 def write_chunks(config: Config, chunks: list[Chunk]) -> None:
     """原子写入 JSONL。"""
-    path = config.paths.chunks_file
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp = tempfile.mkstemp(prefix=".chunks.", suffix=".jsonl", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            for chunk in chunks:
-                fh.write(json.dumps(chunk.to_record(), ensure_ascii=False) + "\n")
-        os.replace(temp, path)
-    except BaseException:
-        pathlib.Path(temp).unlink(missing_ok=True)
-        raise
+    body = "".join(
+        json.dumps(chunk.to_record(), ensure_ascii=False) + "\n" for chunk in chunks
+    )
+    write_atomic(config.paths.chunks_file, body.encode("utf-8"))
 
 
 def stats(chunks: list[Chunk]) -> dict[str, float]:

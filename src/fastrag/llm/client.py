@@ -2,6 +2,7 @@
 
 - 模型、provider、temperature、thinking、超时来自 `[llm.*]`；
 - 接口地址与 key 由角色引用的 `[endpoints.*]` 决定；
+- `init_chat_model` 负责按 provider 选择具体客户端，后续可混用不同厂家；
 - 重试交给客户端 SDK（`max_retries`，只对瞬时错误退避）；
 - 重试耗尽后按 `fallback` 用 `with_fallbacks` 逐级切换；
 - 空回答按失败处理，直接触发备用模型。
@@ -23,7 +24,9 @@ class EmptyResponseError(RuntimeError):
     """模型返回空文本：按失败处理，切换备用模型。"""
 
 
-def build_llm(role: LLMConfig, config: Config, thinking: bool | None = None) -> BaseChatModel:
+def build_llm(
+    role: LLMConfig, config: Config, thinking: bool | None = None
+) -> BaseChatModel:
     """按角色配置创建对话模型。"""
     enabled = role.thinking if thinking is None else thinking
     extra_body = dict(role.extra_body)

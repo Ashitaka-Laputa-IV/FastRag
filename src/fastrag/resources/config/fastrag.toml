@@ -5,7 +5,7 @@
 [paths]
 docs_dir = "data/langchain-docs"    # 输入文档目录
 chunks_file = "data/chunks.jsonl"   # chunk 语料，切块、嵌入、BM25 共用
-embeddings_dir = "data/embeddings"  # vectors.npy + manifest.json
+embeddings_dir = "data/embeddings"  # vector_store.json + manifest.json
 bm25_index_dir = "data/bm25-index"  # BM25 索引与 corpus
 
 [endpoints.siliconflow]

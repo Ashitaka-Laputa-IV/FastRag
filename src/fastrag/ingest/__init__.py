@@ -2,11 +2,12 @@
 
 from fastrag.ingest.artifacts import (
     ArtifactKey,
+    atomic_path,
     matches,
     read_manifest,
+    write_atomic,
     write_json_atomic,
     write_manifest,
-    write_npy_atomic,
 )
 from fastrag.ingest.chunker import (
     build_chunks,
@@ -21,6 +22,7 @@ from fastrag.ingest.download import DownloadSummary, collect_urls, download_docs
 __all__ = [
     "ArtifactKey",
     "DownloadSummary",
+    "atomic_path",
     "build_chunks",
     "chunk_id",
     "collect_urls",
@@ -30,8 +32,8 @@ __all__ = [
     "read_manifest",
     "stats",
     "strip_boilerplate",
+    "write_atomic",
     "write_chunks",
     "write_json_atomic",
     "write_manifest",
-    "write_npy_atomic",
 ]

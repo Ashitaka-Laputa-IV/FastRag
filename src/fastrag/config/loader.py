@@ -15,6 +15,7 @@ import pathlib
 import tomllib
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from fastrag.config.models import Config
@@ -92,35 +93,10 @@ def display_path(path: pathlib.Path) -> str:
         return str(path.resolve())
 
 
-def _env_value(raw: str) -> str:
-    """解析 `.env` 的取值：去掉行尾注释，再去掉一层成对引号。"""
-    quote = ""
-    for index, char in enumerate(raw):
-        if quote:
-            if char == quote:
-                quote = ""
-        elif char in ("'", '"'):
-            quote = char
-        elif char == "#" and (index == 0 or raw[index - 1].isspace()):
-            raw = raw[:index]
-            break
-    value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    return value
-
-
 def load_env(path: pathlib.Path | None = None) -> None:
     """把 `.env` 里的键值写进环境变量（不覆盖已存在的值），默认读工作目录。"""
     path = home() / ".env" if path is None else path
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), _env_value(value))
+    load_dotenv(path, override=False, encoding="utf-8")
 
 
 def _read_ref(ref: ConfigRef) -> str:

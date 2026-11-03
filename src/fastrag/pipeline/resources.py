@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
-import numpy as np
+from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 
 from fastrag.config import Config
@@ -16,10 +16,16 @@ from fastrag.domain import SearchPlan
 from fastrag.index import (
     ChunkStore,
     build_embeddings,
-    ensure_vectors,
+    ensure_vector_store,
     load_index,
 )
-from fastrag.llm import build_llm, build_with_fallbacks, extract_text, load_prompt, prompt_sha
+from fastrag.llm import (
+    build_llm,
+    build_template,
+    build_with_fallbacks,
+    extract_text,
+    prompt_sha,
+)
 from fastrag.retrieve import build_reranker
 
 PROMPT_NAMES = ("search_plan", "answer", "chat")
@@ -40,8 +46,8 @@ class ResourceBundle:
         return build_embeddings(self.config)
 
     @cached_property
-    def vectors(self) -> np.ndarray:
-        return ensure_vectors(self.config, self.store, self.embeddings)
+    def vector_store(self):
+        return ensure_vector_store(self.config, self.store, self.embeddings)
 
     @cached_property
     def bm25(self):
@@ -70,8 +76,8 @@ class ResourceBundle:
         )
 
     @cached_property
-    def prompts(self) -> dict[str, str]:
-        return {name: load_prompt(name) for name in PROMPT_NAMES}
+    def prompts(self) -> dict[str, PromptTemplate]:
+        return {name: build_template(name) for name in PROMPT_NAMES}
 
     @cached_property
     def prompt_hashes(self) -> dict[str, str]:
@@ -79,6 +85,6 @@ class ResourceBundle:
 
     def warmup(self) -> None:
         """显式预热全部资源（CLI `prepare` / 服务启动时可选调用）。"""
-        _ = self.store, self.vectors, self.bm25
+        _ = self.store, self.vector_store, self.bm25
         if self.config.fusion.method == "rerank":
             _ = self.reranker

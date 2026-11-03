@@ -81,10 +81,11 @@ class Chunking(_Strict):
     boilerplate_pattern: str = ""
 
     @model_validator(mode="after")
-    def _check(self) -> "Chunking":
+    def _check(self) -> Chunking:
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError(
-                f"chunk_overlap ({self.chunk_overlap}) 必须小于 chunk_size ({self.chunk_size})"
+                f"chunk_overlap ({self.chunk_overlap}) "
+                f"必须小于 chunk_size ({self.chunk_size})"
             )
         if self.boilerplate_pattern:
             try:
@@ -113,7 +114,7 @@ class LLMConfig(_Strict):
     thinking: bool = True
     timeout: float = Field(default=120.0, gt=0)
     retries: int = Field(default=0, ge=0)
-    fallback: "LLMConfig | None" = None
+    fallback: LLMConfig | None = None
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -134,7 +135,7 @@ class BM25(_Strict):
     min_score: float = 0.0
 
     @model_validator(mode="after")
-    def _check_stopwords(self) -> "BM25":
+    def _check_stopwords(self) -> BM25:
         if isinstance(self.stopwords, str) and self.stopwords not in BM25_STOPWORDS:
             raise ValueError(
                 f"stopwords 必须是内置语言名或字符串列表，当前为 {self.stopwords!r}"
@@ -159,7 +160,7 @@ class Fusion(_Strict):
     )
 
     @model_validator(mode="after")
-    def _check_weights(self) -> "Fusion":
+    def _check_weights(self) -> Fusion:
         if not self.weights:
             raise ValueError("weights 不能为空")
         for channel in ("bm25", "vector"):
@@ -198,7 +199,7 @@ class Config(_Strict):
     download: Download = Field(default_factory=Download)
 
     @model_validator(mode="after")
-    def _check_endpoints(self) -> "Config":
+    def _check_endpoints(self) -> Config:
         known = set(self.endpoints)
         references: list[tuple[str, str]] = [
             ("embedding", self.embedding.endpoint),

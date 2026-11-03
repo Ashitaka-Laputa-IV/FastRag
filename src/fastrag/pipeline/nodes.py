@@ -1,4 +1,4 @@
-"""图节点：plan_search / retrieve / fuse / answer。
+"""图节点：plan_search / retrieve_bm25 / retrieve_vector / fuse / answer。
 
 节点只读取 `ResourceBundle`，不负责资源创建；`Pipeline` 负责装配。
 外部服务失败在离失败点最近的地方降级：
@@ -11,13 +11,13 @@
 from __future__ import annotations
 
 import logging
-from string import Template
 from typing import TypedDict
 
 from fastrag.domain import AnswerResult, ScoredChunk, SearchPlan
 from fastrag.index import search_bm25, search_dense
+from fastrag.llm import render_prompt
 from fastrag.pipeline.resources import ResourceBundle
-from fastrag.retrieve import rerank_chunks, rrf_fuse
+from fastrag.retrieve import collect_rankings, rerank_chunks, rrf_fuse
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +36,6 @@ class RagState(TypedDict, total=False):
     answer: str
 
 
-def _render(prompt: str, **values: str) -> str:
-    return Template(prompt).safe_substitute(values)
-
-
 class RagNodes:
     """RAG 图节点的实现。"""
 
@@ -49,8 +45,10 @@ class RagNodes:
 
     def plan_search(self, state: RagState) -> dict:
         """一次调用同时判断是否检索，并给出两路各自的查询。"""
-        prompt = _render(
-            self.resources.prompts["search_plan"], question=state["question"]
+        prompt = render_prompt(
+            self.resources.prompts["search_plan"],
+            "search_plan",
+            question=state["question"],
         )
         try:
             plan = self.resources.plan_chain.invoke(prompt)
@@ -98,8 +96,7 @@ class RagNodes:
 
     def retrieve_vector(self, state: RagState) -> dict:
         hits = search_dense(
-            self.resources.embeddings,
-            self.resources.vectors,
+            self.resources.vector_store,
             self.resources.store,
             state["vector_query"],
             self.config.retrieval.vector_candidates,
@@ -112,7 +109,7 @@ class RagNodes:
         vector = state.get("vector", [])
         if not bm25 and not vector:
             return {"fused": []}
-        rankings = {"bm25": bm25, "vector": vector}
+        rankings = collect_rankings(bm25, vector)
 
         if self.config.fusion.method == "rerank":
             merged = self._merge(bm25, vector)
@@ -146,14 +143,17 @@ class RagNodes:
             )
             chunks = state.get("fused", [])[:limit]
             context = self._context(chunks)
-            prompt = _render(
+            prompt = render_prompt(
                 self.resources.prompts["answer"],
+                "answer",
                 context=context,
                 question=state["question"],
             )
         else:
-            prompt = _render(
-                self.resources.prompts["chat"], question=state["question"]
+            prompt = render_prompt(
+                self.resources.prompts["chat"],
+                "chat",
+                question=state["question"],
             )
         return {"answer": self._answer_text(prompt)}
 

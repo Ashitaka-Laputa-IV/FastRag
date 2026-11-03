@@ -9,12 +9,10 @@ from fastrag.config import Config
 from fastrag.index import (
     ChunkStore,
     build_embeddings,
-    ensure_vectors,
+    ensure_vector_store,
     load_index,
-    search_bm25,
-    search_dense,
 )
-from fastrag.retrieve import rrf_fuse
+from fastrag.retrieve import hybrid_search, rrf_fuse
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -32,16 +30,14 @@ def run(args: argparse.Namespace, config: Config) -> int:
 
     store = ChunkStore.load(config)
     embeddings = build_embeddings(config)
-    vectors = ensure_vectors(config, store, embeddings)
-    retriever = load_index(config, store)
-
-    bm25 = search_bm25(
-        retriever, store, config, args.text, config.retrieval.bm25_candidates
+    vector_store = ensure_vector_store(config, store, embeddings)
+    rankings = hybrid_search(
+        config,
+        store,
+        load_index(config, store),
+        vector_store,
+        args.text,
     )
-    vector = search_dense(
-        embeddings, vectors, store, args.text, config.retrieval.vector_candidates
-    )
-    rankings = {"bm25": bm25, "vector": vector}
     fused = rrf_fuse(rankings, config.fusion.rrf_k, config.fusion.weights)
 
     positions = {
