@@ -45,11 +45,11 @@ fastrag ask --config local -v
 uv run fastrag prepare
 ```
 
-三份产物用 `chunks.jsonl` 的全字节 sha256 互相校验：
+向量 manifest 与 BM25 索引的 meta 记录 `chunks.jsonl` 的全字节 sha256（`chunks.jsonl` 本身不记录自己的 digest）：
 
-- 向量按 chunk id 增量复用：只嵌入新增或内容变化的块；
-- BM25 索引检测到语料或 `[bm25]` 参数变化时提示重建；
-- 写向量与 manifest 都采用「临时文件 + 原子 rename」。
+- 向量 manifest 记录 digest，但复用主要看 chunk id：有可复用旧向量时只嵌入缺失的 id；没有可复用旧向量（含嵌入模型或维度变化）则全量重嵌；
+- BM25 索引加载时严格校验 digest 与 `[bm25]` 的索引参数，不一致会提示重建；
+- 写向量与 manifest 各自采用「临时文件 + 原子 rename」，两者不是单个事务；BM25 索引目录由 `bm25s.save` 直接写入。
 
 ## 库调用
 
